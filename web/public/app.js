@@ -6066,7 +6066,7 @@ function _appendAgentEvent(ev) {
       if (reasoningBody) {
         const incomingText = ev.text || '';
         const prevText = prev.dataset.reasoningText || '';
-        const sep = incomingText.length < 50 && prevText.length < 200 ? '' : '\n\n';
+        const sep = incomingText.length < 50 ? '' : '\n\n';
         const merged = prevText + sep + incomingText;
         prev.dataset.reasoningText = merged;
         reasoningBody.textContent = merged;
@@ -6096,7 +6096,7 @@ function _appendAgentEvent(ev) {
       if (body) {
         const incomingText = ev.text || '';
         const prevText = prev.dataset.assistantText || '';
-        const sep = incomingText.length < 50 && prevText.length < 200 ? '' : '\n\n';
+        const sep = incomingText.length < 50 ? '' : '\n\n';
         const merged = prevText + sep + incomingText;
         prev.dataset.assistantText = merged;
         body.innerHTML = renderMd(merged);

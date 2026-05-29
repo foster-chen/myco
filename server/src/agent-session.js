@@ -229,6 +229,7 @@ class AgentSession extends EventEmitter {
     this._ocHandle = null;
     this._ocPendingMessages = [];
     this._ocTextBuffer = '';
+    this._ocReasoningBuffer = '';
 
     // Always emit a ready event so the browser's event-log pane has
     // something visible from the moment the WS attaches — otherwise a
@@ -831,38 +832,45 @@ class AgentSession extends EventEmitter {
         this._emit({ type: 'assistant_text', text: event.delta });
         break;
       case 'reasoning':
-        this._ocTextBuffer += event.delta;
+        this._ocReasoningBuffer += event.delta;
         this._emit({ type: 'reasoning_text', text: event.delta });
         break;
       case 'tool_call':
         this._flushOCTextBuffer();
+        this._flushOCReasoningBuffer();
         this.openToolCalls.set(event.id, { name: event.name, input: event.input, summary: _summariseToolInput(event.name, event.input), ts: new Date().toISOString() });
         this._emit({ type: 'tool_use', id: event.id, name: event.name, input: event.input, summary: _summariseToolInput(event.name, event.input) });
         this._broadcastToolProgress();
         break;
       case 'tool_result':
+        this._flushOCTextBuffer();
+        this._flushOCReasoningBuffer();
         this.openToolCalls.delete(event.id);
         this._emit({ type: 'tool_result', id: event.id, name: event.name, result: event.result });
         this._broadcastToolProgress();
         break;
       case 'step_start':
         this._flushOCTextBuffer();
+        this._flushOCReasoningBuffer();
         this._emit({ type: 'step_start', index: event.index });
         break;
       case 'step_finish':
         this._flushOCTextBuffer();
+        this._flushOCReasoningBuffer();
         if (event.reason !== 'tool-calls') {
           this._emit({ type: 'turn_result', usage: event.usage, durationMs: 0 });
         }
         break;
       case 'finish':
         this._flushOCTextBuffer();
+        this._flushOCReasoningBuffer();
         this._emit({ type: 'turn_result', usage: event.usage, durationMs: 0, subtype: 'done' });
         this._iterating = false;
         this.emit('idle');
         break;
       case 'error':
         this._flushOCTextBuffer();
+        this._flushOCReasoningBuffer();
         this.emit('exit', { reason: event.error.message || String(event.error) });
         this._iterating = false;
         break;
@@ -873,6 +881,10 @@ class AgentSession extends EventEmitter {
     const text = this._ocTextBuffer;
     this._ocTextBuffer = '';
     if (text) this._persistAssistantTextToRecChat(text);
+  }
+
+  _flushOCReasoningBuffer() {
+    this._ocReasoningBuffer = '';
   }
 
   async _canUseToolOC(toolName, toolInput) {
