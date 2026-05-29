@@ -32,7 +32,7 @@ Single developers running multiple agents in parallel — and small teams who wa
 
 ## Architecture in one breath
 
-A single Node process (`mycod`) hosts an Express server + WebSocket gateway. Each agent session is an `AgentSession` instance wrapping a pluggable agent SDK. State is plain JSON files on disk — `/data/sessions.json` for the per-host registry, `<workspace>/_myco_/` for the per-project artifacts that travel with the code. Caddy fronts it for TLS + HTTP/2.
+A single Node process (`mycod`) hosts an Express server + WebSocket gateway. Each agent session is an `AgentSession` instance wrapping a pluggable agent backend — Anthropic's Claude Agent SDK by default, or `@opencode-ai/agent-sdk` (Vercel AI SDK) for Alibaba-CN/ZhipuAI providers, selected at deploy time via `MYCO_AGENT_PROVIDER`. State is plain JSON files on disk — `/data/sessions.json` for the per-host registry, `<workspace>/_myco_/` for the per-project artifacts that travel with the code. Caddy fronts it for TLS + HTTP/2.
 
 See [architecture.md](./architecture.md) for the full picture, [USER_MANUAL.md](./USER_MANUAL.md) for the day-to-day reference, and [CLAUDE.md](./CLAUDE.md) for the agent-facing convention pack.
 
@@ -41,6 +41,7 @@ See [architecture.md](./architecture.md) for the full picture, [USER_MANUAL.md](
 - Docker (for the production deploy path).
 - Node.js 20+ + `npm` (for the local dev path + the build step that vendors CodeMirror).
 - A GitHub OAuth app (Client ID + Secret) if you want OAuth sign-in.
+- An LLM provider API key — Anthropic by default, or Alibaba-CN/ZhipuAI via `MYCO_AGENT_PROVIDER`.
 
 ## Quick start (local dev)
 
@@ -49,11 +50,34 @@ git clone <repo-url> myco
 cd myco
 npm install              # installs build-time deps (esbuild, codemirror)
 npm run build:editor     # produces web/public/vendor/codemirror.bundle.js
-cd server && npm install # runtime deps
+cd server && npm install # runtime deps (includes @opencode-ai/agent-sdk vendor)
 cd ..
-PORT=3000 MYCO_STATE_DIR=$HOME/.myco node server/src/index.js
+# Anthropic (default):
+PORT=3000 MYCO_STATE_DIR=$HOME/.myco ANTHROPIC_API_KEY=sk-ant-… node server/src/index.js
 # → open http://localhost:3000
+
+# Alibaba-CN (DashScope):
+PORT=3000 MYCO_STATE_DIR=$HOME/.myco \
+  MYCO_AGENT_PROVIDER=alibaba-cn MYCO_AGENT_API_KEY=sk-dashscope-… \
+  node server/src/index.js
+
+# ZhipuAI:
+PORT=3000 MYCO_STATE_DIR=$HOME/.myco \
+  MYCO_AGENT_PROVIDER=zhipuai MYCO_AGENT_API_KEY=sk-zhipu-… \
+  node server/src/index.js
 ```
+
+## Supported agent providers
+
+| Provider ID | SDK Path | Env Var for API Key | Default Model |
+|---|---|---|---|
+| `anthropic` | Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`) | `ANTHROPIC_API_KEY` | claude-sonnet-4 |
+| `alibaba-cn` | OpenCode Agent SDK (`@opencode-ai/agent-sdk`) via `@ai-sdk/openai-compatible` | `DASHSCOPE_API_KEY` | qwen3-235b-a22b |
+| `alibaba` | OpenCode Agent SDK | `DASHSCOPE_API_KEY` | qwen3-235b-a22b |
+| `zhipuai` | OpenCode Agent SDK | `ZHIPU_API_KEY` | glm-5 |
+| `alibaba-coding-plan-cn` | OpenCode Agent SDK | `ALIBABA_CODING_PLAN_API_KEY` | (varies) |
+
+Set `MYCO_AGENT_PROVIDER` (default: `anthropic`) to choose the backend at deploy time. Override the model with `MYCO_AGENT_MODEL`; set a lighter model for auxiliary calls (/btw, summarizer) with `MYCO_AUX_MODEL`.
 
 ## Production deploy
 
@@ -78,18 +102,24 @@ See the `## Deployment` section of [CLAUDE.md](./CLAUDE.md) for the single-state
 | `MYCO_PUBLIC_ORIGIN` | — | Public URL for OAuth callback (e.g. `https://myco.labxnow.ai`) |
 | `MYCO_GH_CLIENT_ID` / `_SECRET` | — | GitHub OAuth app credentials (set via `./scripts/deploy.sh --set-oauth`) |
 | `MYCO_DEPLOY_HOST` | `myco.labxnow.ai` | Remote host the deploy script SSHes to |
+| `MYCO_AGENT_PROVIDER` | `anthropic` | Agent backend: `anthropic`, `alibaba-cn`, `alibaba`, `zhipuai`, `alibaba-coding-plan-cn` |
+| `MYCO_AGENT_API_KEY` | — | API key for the chosen provider (or provider-specific env var) |
+| `MYCO_AGENT_MODEL` | (provider default) | Override model for the configured provider |
+| `MYCO_AUX_MODEL` | (same as `MYCO_AGENT_MODEL`) | Model for auxiliary calls (/btw, summarizer, plan extractor) |
 | `PORT` | `3000` | Listen port (host side of the container) |
 
 ## Documentation
 
 - [USER_MANUAL.md](./USER_MANUAL.md) — day-to-day cheat sheet (slash commands, plan workflow, editor)
 - [architecture.md](./architecture.md) — design + components + data model + diagrams
+- [DEPLOY.md](./DEPLOY.md) — full deployment guide (env vars, provider config, Docker setup)
 - [CLAUDE.md](./CLAUDE.md) — agent-facing conventions (working in this repo, deployment, code style)
+- `docs/superpowers/specs/` — design specs for multi-provider agent backend
 - `web/public/best-practices-template.md` — the engineering best-practices banner auto-injected at the top of the Arch tab + each project's `CLAUDE.md` on first session spawn
 
 ## Status + roadmap
 
-myco is in active use. The current agent backend is the Claude Agent SDK; a second backend (OpenAI Agents SDK) is filed as `fr-52` to make the platform vendor-agnostic. Filed and tracked the same way as any other work — open the Plan tab to see what's next.
+myco is in active use. The agent backend is pluggable — Anthropic's Claude Agent SDK by default, with Alibaba-CN (DashScope) and ZhipuAI support via `@opencode-ai/agent-sdk`. OpenAI Agents SDK integration is filed as `fr-52` for future expansion. Filed and tracked the same way as any other work — open the Plan tab to see what's next.
 
 ## License
 
