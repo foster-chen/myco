@@ -7,12 +7,42 @@
 // gracefully instead of breaking the request that triggered the call.
 
 const https = require('https');
+const agentConfig = require('./agent-config');
+let agentSdk;
+try { agentSdk = require('@opencode-ai/agent-sdk'); } catch(e) { agentSdk = null; }
 
 const ENDPOINT = 'https://api.anthropic.com/v1/messages';
 const DEFAULT_MODEL = 'claude-haiku-4-5-20251001';
 const DEFAULT_TIMEOUT_MS = 30000;
 
 function callAnthropic({ system, userMessage, model = DEFAULT_MODEL, maxTokens = 200, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+  const cfg = agentConfig.resolve();
+  if (cfg.providerPath === 'opencode' && agentSdk) {
+    return callProviderApi({ system, userMessage, cfg, maxTokens, timeoutMs });
+  }
+  return callAnthropicRaw({ system, userMessage, model, maxTokens, timeoutMs });
+}
+
+async function callProviderApi({ system, userMessage, cfg, maxTokens, timeoutMs } = {}) {
+  if (!cfg.apiKey) return null;
+  if (!userMessage) return null;
+  try {
+    const result = await agentSdk.generateText({
+      provider: cfg.providerId,
+      model: cfg.auxModel || cfg.model,
+      apiKey: cfg.apiKey,
+      prompt: userMessage,
+      instructions: system,
+      maxTokens,
+    });
+    return result.text || null;
+  } catch (err) {
+    console.error(`[anthropic] provider error: ${err.message}`);
+    return null;
+  }
+}
+
+function callAnthropicRaw({ system, userMessage, model = DEFAULT_MODEL, maxTokens = 200, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return Promise.resolve(null);
   if (!userMessage) return Promise.resolve(null);

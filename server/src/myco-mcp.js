@@ -12,6 +12,8 @@
 
 const { createSdkMcpServer, tool } = require('@anthropic-ai/claude-agent-sdk');
 const { z } = require('zod');
+let agentSdk;
+try { agentSdk = require('@opencode-ai/agent-sdk'); } catch(e) { agentSdk = null; }
 
 // Tool-name prefix the SDK applies to MCP server tools:
 //   mcp__<server-name>__<tool-name>
@@ -149,4 +151,46 @@ function createMycoMcpServer(sessionId) {
   });
 }
 
-module.exports = { createMycoMcpServer, MYCO_MCP_TOOL_PREFIX };
+function createMycoMcpToolsOC(sessionId) {
+  if (!agentSdk) throw new Error('@opencode-ai/agent-sdk not installed');
+  const tools = {};
+  tools['mcp__myco__add_plan_items'] = agentSdk.tool({
+    description:
+      'Append todo / feature-request / bug items to this session\'s Plan tab. ' +
+      'Server generates ids (td-N / fr-N / bug-N) and persists to ' +
+      '_myco_/plan.json. Use this when the user runs /add2plan, asks ' +
+      'to "break X into todos", or otherwise wants discrete plan items ' +
+      'created. Prefer 1-7 short items over many over-decomposed ones. ' +
+      'Use dependsOn only when item B can\'t start until item A finishes ' +
+      '— most items should have no dependsOn.',
+    inputSchema: agentSdk.jsonSchema({
+      type: 'object',
+      properties: {
+        items: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 20,
+          items: {
+            type: 'object',
+            properties: {
+              text: { type: 'string', minLength: 1, maxLength: 2000, description: 'Short description (1-2 sentences) of the work.' },
+              layer: { type: 'string', enum: ['Todo', 'Feature', 'Bug'], description: 'Todo = concrete action item; Feature = feature request; Bug = bug report.' },
+              dependsOn: { type: 'array', maxItems: 10, items: { type: 'string' }, description: 'OPTIONAL ids of OTHER items this can\'t start until. Use sparingly.' },
+            },
+            required: ['text', 'layer'],
+          },
+          description: '1-20 items to append.',
+        },
+      },
+      required: ['items'],
+    }),
+    execute: async (args) => {
+      const r = _appendPlanItems(sessionId, args.items);
+      if (!r.ok) return { error: r.message };
+      return { result: r.message, ids: r.ids };
+    },
+  });
+  return tools;
+}
+
+module.exports = { createMycoMcpServer, createMycoMcpToolsOC, MYCO_MCP_TOOL_PREFIX };

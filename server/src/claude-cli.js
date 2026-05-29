@@ -15,8 +15,36 @@
 // in-process — same auth, no PATH dep, faster (no process startup).
 
 const DEFAULT_TIMEOUT_MS = 120000;
+const agentConfig = require('./agent-config');
+let agentSdk;
+try { agentSdk = require('@opencode-ai/agent-sdk'); } catch(e) { agentSdk = null; }
 
 async function callClaudeCli({ system, userMessage, cwd, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+  if (!userMessage) return null;
+  const cfg = agentConfig.resolve();
+  if (cfg.providerPath === 'opencode' && agentSdk) {
+    return callOpenCodeCli({ system, userMessage, cwd, timeoutMs, cfg });
+  }
+  return callAnthropicCli({ system, userMessage, cwd, timeoutMs });
+}
+
+async function callOpenCodeCli({ system, userMessage, cwd, timeoutMs, cfg }) {
+  try {
+    const result = await agentSdk.generateText({
+      provider: cfg.providerId,
+      model: cfg.auxModel || cfg.model,
+      apiKey: cfg.apiKey,
+      prompt: userMessage,
+      instructions: system,
+    });
+    return result.text || null;
+  } catch (err) {
+    console.error(`[claude-cli] opencode error: ${err.message || String(err)}`);
+    return null;
+  }
+}
+
+async function callAnthropicCli({ system, userMessage, cwd, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
   if (!userMessage) return null;
   const { query } = require('@anthropic-ai/claude-agent-sdk');
   const ac = new AbortController();

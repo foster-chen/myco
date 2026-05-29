@@ -8,6 +8,9 @@
 // session works here too.
 
 const { stripAnsi, tailLines, formatChat } = require('./text-utils');
+const agentConfig = require('./agent-config');
+let agentSdk;
+try { agentSdk = require('@opencode-ai/agent-sdk'); } catch(e) { agentSdk = null; }
 
 const TIMEOUT_MS = 60000;
 const ASSISTANT_USER = 'claude';
@@ -62,6 +65,14 @@ function buildPrompt({ chatHistory, scrollback, lastMessage }) {
 // faster (no process startup cost). Output: drains the streaming
 // result to a single text string for caller compatibility.
 async function runClaudeP(cwd, promptBody) {
+  const cfg = agentConfig.resolve();
+  if (cfg.providerPath === 'opencode' && agentSdk) {
+    return runOpenCodeP(cwd, promptBody, cfg);
+  }
+  return runAnthropicP(cwd, promptBody);
+}
+
+async function runAnthropicP(cwd, promptBody) {
   const { query } = require('@anthropic-ai/claude-agent-sdk');
   const ac = new AbortController();
   const timer = setTimeout(() => { try { ac.abort(); } catch {} }, TIMEOUT_MS);
@@ -102,6 +113,21 @@ async function runClaudeP(cwd, promptBody) {
   clearTimeout(timer);
   const text = (finalText || assistantText).trim();
   return text || '(claude returned no text)';
+}
+
+async function runOpenCodeP(cwd, promptBody, cfg) {
+  try {
+    const result = await agentSdk.generateText({
+      provider: cfg.providerId,
+      model: cfg.auxModel || cfg.model,
+      apiKey: cfg.apiKey,
+      prompt: promptBody,
+      instructions: ASSISTANT_INSTRUCTIONS,
+    });
+    return result.text || '(agent returned no text)';
+  } catch (err) {
+    return `(agent error: ${err.message || String(err)})`;
+  }
 }
 
 function askAssistant({ cwd, chatHistory, scrollback, lastMessage }) {

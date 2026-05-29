@@ -23,6 +23,9 @@ const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
 const { query } = require('@anthropic-ai/claude-agent-sdk');
+const agentConfig = require('./agent-config');
+let agentSdk;
+try { agentSdk = require('@opencode-ai/agent-sdk'); } catch(e) { agentSdk = null; }
 
 // Per-session in-memory replay buffer cap. The buffer is hydrated
 // from <cwd>/_myco_/events.jsonl on construction, so this cap is
@@ -220,6 +223,13 @@ class AgentSession extends EventEmitter {
     // SDK iteration can continue with the user's choice.
     this._pendingPermissions = new Map();
 
+    const cfg = agentConfig.resolve();
+    this._providerPath = cfg.providerPath;
+    this._providerConfig = cfg;
+    this._ocHandle = null;
+    this._ocPendingMessages = [];
+    this._ocTextBuffer = '';
+
     // Always emit a ready event so the browser's event-log pane has
     // something visible from the moment the WS attaches — otherwise a
     // fresh agent session looks dead until the user types something.
@@ -229,6 +239,7 @@ class AgentSession extends EventEmitter {
         type: 'session_ready',
         cwd: this.cwd,
         resumedFromSdkSessionId: this.sdkSessionId || null,
+        providerId: this._providerPath === 'opencode' ? this._providerConfig.providerId : 'anthropic',
       });
       if (opts.initialPrompt) this.write(opts.initialPrompt);
     });
@@ -267,6 +278,11 @@ class AgentSession extends EventEmitter {
   // escapes the retry loop immediately. Non-recoverable errors (auth
   // failures, validation) fatal on the first attempt without retry.
   async _ensureIteration() {
+    if (this._providerPath === 'anthropic') return this._ensureIterationAnthropic();
+    return this._ensureIterationOC();
+  }
+
+  async _ensureIterationAnthropic() {
     if (!this.alive || this._iterating) return;
     this._iterating = true;
 
@@ -720,6 +736,206 @@ class AgentSession extends EventEmitter {
     await new Promise((resolve) => setTimeout(resolve, baseMs));
   }
 
+  async _ensureIterationOC() {
+    if (!this.alive || this._iterating) return;
+    this._iterating = true;
+
+    if (!agentSdk) {
+      this._emit({ type: 'fatal', error: 'opencode agent SDK not available' });
+      this._iterating = false;
+      return;
+    }
+
+    const MAX_ATTEMPTS = 3;
+    const BACKOFF_MS = [1000, 4000, 16000];
+
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      if (!this.alive) break;
+      const lastAttempt = attempt === MAX_ATTEMPTS;
+
+      try {
+        const messagesToSend = [...this._ocPendingMessages];
+        this._ocPendingMessages = [];
+        const handle = agentSdk.createAgent({
+          provider: this._providerConfig.providerId,
+          model: this._providerConfig.model,
+          apiKey: this._providerConfig.apiKey,
+          tools: this._resolveOCTools(),
+          systemPrompt: this._readSystemPrompt(),
+          canUseTool: this._canUseToolOC.bind(this),
+          messages: messagesToSend,
+        });
+        this._ocHandle = handle;
+      } catch (err) {
+        if (this._isRecoverable(err) && !lastAttempt) {
+          await this._emitRetryAndWait(attempt, BACKOFF_MS, err);
+          continue;
+        }
+        this._emit({
+          type: 'fatal',
+          error: String((err && err.message) || err),
+          ...(lastAttempt && this._isRecoverable(err) ? { reason: 'retry_exhausted', attempts: attempt } : {}),
+        });
+        break;
+      }
+
+      this._emit({ type: 'iteration_start', attempt });
+
+      let streamErr = null;
+      let killedMidStream = false;
+      try {
+        for await (const event of this._ocHandle.stream()) {
+          if (!this.alive) { killedMidStream = true; break; }
+          this._adaptOCEvent(event);
+        }
+      } catch (err) {
+        streamErr = err;
+      }
+
+      if (killedMidStream) {
+        this._emit({ type: 'iteration_aborted', reason: 'kill_mid_stream' });
+        break;
+      }
+      if (!streamErr) {
+        break;
+      }
+
+      const isAbort = (streamErr && (streamErr.name === 'AbortError' || /aborted|abort/i.test(String(streamErr.message || ''))));
+      if (isAbort) {
+        this._emit({ type: 'iteration_aborted' });
+        break;
+      }
+
+      if (this._isRecoverable(streamErr) && !lastAttempt) {
+        await this._emitRetryAndWait(attempt, BACKOFF_MS, streamErr);
+        continue;
+      }
+
+      this._emit({
+        type: 'fatal',
+        error: String((streamErr && streamErr.message) || streamErr),
+        ...(lastAttempt && this._isRecoverable(streamErr) ? { reason: 'retry_exhausted', attempts: attempt } : {}),
+      });
+      break;
+    }
+
+    this._iterating = false;
+    this._ocHandle = null;
+    if (this.alive) this.emit('idle');
+  }
+
+  _adaptOCEvent(event) {
+    switch (event.type) {
+      case 'text':
+        this._ocTextBuffer += event.delta;
+        this._emit({ type: 'assistant_text', text: event.delta });
+        break;
+      case 'reasoning':
+        this._ocTextBuffer += event.delta;
+        this._emit({ type: 'reasoning_text', text: event.delta });
+        break;
+      case 'tool_call':
+        this._flushOCTextBuffer();
+        this.openToolCalls.set(event.id, { name: event.name, input: event.input, summary: _summariseToolInput(event.name, event.input), ts: new Date().toISOString() });
+        this._emit({ type: 'tool_use', id: event.id, name: event.name, input: event.input, summary: _summariseToolInput(event.name, event.input) });
+        this._broadcastToolProgress();
+        break;
+      case 'tool_result':
+        this.openToolCalls.delete(event.id);
+        this._emit({ type: 'tool_result', id: event.id, name: event.name, result: event.result });
+        this._broadcastToolProgress();
+        break;
+      case 'step_start':
+        this._flushOCTextBuffer();
+        this._emit({ type: 'step_start', index: event.index });
+        break;
+      case 'step_finish':
+        this._flushOCTextBuffer();
+        if (event.reason !== 'tool-calls') {
+          this._emit({ type: 'turn_result', usage: event.usage, durationMs: 0 });
+        }
+        break;
+      case 'finish':
+        this._flushOCTextBuffer();
+        this._emit({ type: 'turn_result', usage: event.usage, durationMs: 0, subtype: 'done' });
+        this._iterating = false;
+        this.emit('idle');
+        break;
+      case 'error':
+        this._flushOCTextBuffer();
+        this.emit('exit', { reason: event.error.message || String(event.error) });
+        this._iterating = false;
+        break;
+    }
+  }
+
+  _flushOCTextBuffer() {
+    const text = this._ocTextBuffer;
+    this._ocTextBuffer = '';
+    if (text) this._persistAssistantTextToRecChat(text);
+  }
+
+  async _canUseToolOC(toolName, toolInput) {
+    const hookResult = this._preToolUseHookCheck(toolName, toolInput);
+    if (hookResult) return hookResult.behavior === 'allow';
+
+    const hash = crypto.createHash('sha256').update(JSON.stringify({ toolName, toolInput })).digest('hex').slice(0, 16);
+    const menu = { hash, toolName, toolInput };
+    this.pendingMenus.set(hash, menu);
+
+    return new Promise((resolve) => {
+      this._pendingPermissions.set(hash, { kind: 'permission-oc', toolName, toolInput, resolveOC: resolve });
+      this._emit({ type: 'permission_request', toolName, hash });
+      this.emit('menu', menu);
+    });
+  }
+
+  _resolveOCTools() {
+    const { createMycoMcpToolsOC } = require('./myco-mcp');
+    return createMycoMcpToolsOC(this.sessionId);
+  }
+
+  _readSystemPrompt() {
+    const claudeMdPath = path.join(this.cwd, 'CLAUDE.md');
+    try {
+      if (fs.existsSync(claudeMdPath)) return fs.readFileSync(claudeMdPath, 'utf8');
+    } catch {}
+    return '';
+  }
+
+  _preToolUseHookCheck(toolName, toolInput) {
+    try {
+      if (typeof toolName === 'string' && toolName.startsWith('mcp__myco__')) {
+        const reason = `myco-internal MCP tool (${toolName})`;
+        console.log(`[agent-hook] ${this.sessionId} PreToolUse=allow ${toolName} (myco-internal)`);
+        this._emit({ type: 'hook_allow', toolName, reason });
+        return { behavior: 'allow' };
+      }
+      const inputForMatching = _matchingInputFor(toolName, toolInput);
+      const sessionsMod = require('./sessions');
+      const permissions = require('./permissions');
+      const rec = sessionsMod.getSessionRecord && sessionsMod.getSessionRecord(this.sessionId);
+      const decision = permissions.decide(rec, toolName, inputForMatching);
+
+      if (decision === 'allow') {
+        const reason = `myco session allow-list matched (${toolName}${inputForMatching ? '(' + inputForMatching.slice(0, 60) + ')' : ''})`;
+        console.log(`[agent-hook] ${this.sessionId} PreToolUse=allow ${toolName}`);
+        this._emit({ type: 'hook_allow', toolName, reason });
+        return { behavior: 'allow' };
+      }
+      if (decision === 'deny') {
+        const reason = `myco session deny-list matched (${toolName}${inputForMatching ? '(' + inputForMatching.slice(0, 60) + ')' : ''})`;
+        console.log(`[agent-hook] ${this.sessionId} PreToolUse=deny ${toolName}`);
+        this._emit({ type: 'hook_deny', toolName, reason });
+        return { behavior: 'deny' };
+      }
+      return null;
+    } catch (err) {
+      console.error(`[agent-hook] ${this.sessionId} PreToolUseHookCheck threw: ${err.message}`);
+      return null;
+    }
+  }
+
   // Abort the in-flight SDK iteration. Next .write() will start a fresh
   // query() with resume=sdkSessionId so the conversation continues from
   // where we left off (modulo any tool that was mid-execution when the
@@ -727,6 +943,10 @@ class AgentSession extends EventEmitter {
   // results gracefully).
   interrupt() {
     if (!this.alive) return;
+    if (this._providerPath === 'opencode' && this._ocHandle) {
+      this._ocHandle.interrupt();
+      return;
+    }
     if (this._abortController) {
       try { this._abortController.abort(); } catch {}
     }
@@ -787,6 +1007,7 @@ class AgentSession extends EventEmitter {
         model: m.model || (m.data && m.data.model) || null,
         tools: m.tools || (m.data && m.data.tools) || [],
         cwd: this.cwd,
+        providerId: this._providerPath === 'opencode' ? this._providerConfig.providerId : 'anthropic',
       };
       this._emit({ type: 'system_init', ...this._initSnapshot });
       return;
@@ -940,72 +1161,28 @@ class AgentSession extends EventEmitter {
   // The deny path also re-emits a chat note (parallel to the legacy
   // auto-respond message) so users still see WHY a tool was blocked.
   async _preToolUseHook(input /* HookInput */) {
-    try {
-      const toolName = input && input.tool_name;
-      const toolInput = input && input.tool_input;
-      const tool_use_id = input && input.tool_use_id;
-      // myco's own MCP tools (mcp__myco__*) are auto-allowed —
-      // they're internal server-side mutations and the user
-      // shouldn't see a permission prompt every time claude
-      // appends a plan item via mcp__myco__add_plan_items.
-      if (typeof toolName === 'string' && toolName.startsWith('mcp__myco__')) {
-        const reason = `myco-internal MCP tool (${toolName})`;
-        console.log(`[agent-hook] ${this.sessionId} PreToolUse=allow ${toolName} tool_use_id=${tool_use_id || '?'} (myco-internal)`);
-        this._emit({ type: 'hook_allow', toolName, tool_use_id, reason });
-        return {
-          hookSpecificOutput: {
-            hookEventName: 'PreToolUse',
-            permissionDecision: 'allow',
-            permissionDecisionReason: reason,
-          },
-        };
-      }
-      const inputForMatching = _matchingInputFor(toolName, toolInput);
-      // Lazy-require to dodge the pty.js → sessions.js → agent-session.js
-      // import-cycle hazard.
-      const sessionsMod = require('./sessions');
-      const permissions = require('./permissions');
-      const rec = sessionsMod.getSessionRecord
-        && sessionsMod.getSessionRecord(this.sessionId);
-      const decision = permissions.decide(rec, toolName, inputForMatching);
-
-      if (decision === 'allow') {
-        const reason = `myco session allow-list matched (${toolName}${inputForMatching ? '(' + inputForMatching.slice(0, 60) + ')' : ''})`;
-        console.log(`[agent-hook] ${this.sessionId} PreToolUse=allow ${toolName} tool_use_id=${tool_use_id || '?'}`);
-        this._emit({ type: 'hook_allow', toolName, tool_use_id, reason });
-        return {
-          hookSpecificOutput: {
-            hookEventName: 'PreToolUse',
-            permissionDecision: 'allow',
-            permissionDecisionReason: reason,
-          },
-        };
-      }
-      if (decision === 'deny') {
-        const reason = `myco session deny-list matched (${toolName}${inputForMatching ? '(' + inputForMatching.slice(0, 60) + ')' : ''})`;
-        console.log(`[agent-hook] ${this.sessionId} PreToolUse=deny ${toolName} tool_use_id=${tool_use_id || '?'}`);
-        this._emit({ type: 'hook_deny', toolName, tool_use_id, reason });
-        // Mirror the legacy menuMod.autoRespondToMenu chat note so the
-        // user knows WHY their session's deny rule fired.
+    const toolName = input && input.tool_name;
+    const toolInput = input && input.tool_input;
+    const tool_use_id = input && input.tool_use_id;
+    const result = this._preToolUseHookCheck(toolName, toolInput);
+    if (result) {
+      if (result.behavior === 'deny') {
+        const inputForMatching = _matchingInputFor(toolName, toolInput);
         try {
           const ASSISTANT = 'claude';
           const txt = `🚫 auto-denied \`${toolName}(${inputForMatching || ''})\` (matched session deny list). Run \`/deny\` / \`/allow\` to mutate.`;
           this.emit('chat', { user: ASSISTANT, text: txt, ts: new Date().toISOString(), meta: { kind: 'menu-auto', verb: 'deny', toolName } });
         } catch {}
-        return {
-          hookSpecificOutput: {
-            hookEventName: 'PreToolUse',
-            permissionDecision: 'deny',
-            permissionDecisionReason: reason,
-          },
-        };
       }
-      // 'ask' / unknown → no opinion; canUseTool will handle it.
-      return {};
-    } catch (err) {
-      console.error(`[agent-hook] ${this.sessionId} PreToolUse threw: ${err.message}`);
-      return {};
+      return {
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: result.behavior,
+          permissionDecisionReason: result.reason || '',
+        },
+      };
     }
+    return {};
   }
 
   // Synthesize a chat-pane menu from a canUseTool fire, broadcast it via
@@ -1343,6 +1520,12 @@ class AgentSession extends EventEmitter {
     // the Map (their own resolveMenuPick will clear them individually).
     this.pendingMenus.delete(hash);
 
+    if (pending.kind === 'permission-oc') {
+      this._emit({ type: 'permission_resolved', toolName: pending.toolName, hash, pickedN: n, decision: n === 3 ? 'deny' : 'allow' });
+      pending.resolveOC(n !== 3);
+      return true;
+    }
+
     if (pending.kind === 'ask') {
       const shared = pending.shared;
       const i = pending.questionIdx;
@@ -1624,8 +1807,11 @@ class AgentSession extends EventEmitter {
   _persistAssistantTextToRecChat(text) {
     const trimmed = String(text || '').trim();
     if (!trimmed) return;
+    const agentName = this._providerPath === 'opencode'
+        ? (this._providerConfig.providerId || 'agent')
+        : 'claude';
     const msg = {
-      user: 'claude',
+      user: agentName,
       text: trimmed,
       ts: new Date().toISOString(),
       meta: { fromAgent: true },
@@ -1747,6 +1933,13 @@ class AgentSession extends EventEmitter {
     if (!this.alive) return;
     const trimmed = String(text || '').trim();
     if (!trimmed) return;
+    if (this._providerPath === 'opencode') {
+      this._ocPendingMessages.push({ role: 'user', content: trimmed });
+      this._emit({ type: 'turn_start', prompt: trimmed.slice(0, 200) });
+      this._currentTurnAssistantText = '';
+      if (!this._iterating) this._ensureIterationOC();
+      return;
+    }
     const envelope = { type: 'user', message: { role: 'user', content: trimmed } };
     // bug-40: remember this turn so a poisoned-resume recovery can
     // redeliver it to a fresh conversation (cleared on the next `result`).
@@ -1780,6 +1973,9 @@ class AgentSession extends EventEmitter {
   kill() {
     if (!this.alive) return;
     this.alive = false;
+    if (this._providerPath === 'opencode' && this._ocHandle) {
+      this._ocHandle.kill();
+    }
     if (this._abortController) {
       try { this._abortController.abort(); } catch {}
     }
