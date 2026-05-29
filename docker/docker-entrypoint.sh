@@ -13,14 +13,18 @@ if [ ! -f /root/.profile ]; then
 fi
 
 # Migrate data from old layout (pre-mount) if /root is missing claude config
-if [ ! -f /root/.claude.json ] && [ -f "$DATA/.claude.json" ]; then
-    cp "$DATA/.claude.json" /root/.claude.json
-fi
-if [ ! -d /root/.claude ] && [ -d "$DATA/.claude" ]; then
-    cp -a "$DATA/.claude" /root/.claude
-fi
-if [ ! -d /root/.local ] && [ -d "$DATA/.local" ]; then
-    cp -a "$DATA/.local" /root/.local
+# Only applies when MYCO_AGENT_PROVIDER is 'anthropic' (or unset — default)
+AGENT_PROVIDER="${MYCO_AGENT_PROVIDER:-anthropic}"
+if [ "$AGENT_PROVIDER" = "anthropic" ]; then
+  if [ ! -f /root/.claude.json ] && [ -f "$DATA/.claude.json" ]; then
+      cp "$DATA/.claude.json" /root/.claude.json
+  fi
+  if [ ! -d /root/.claude ] && [ -d "$DATA/.claude" ]; then
+      cp -a "$DATA/.claude" /root/.claude
+  fi
+  if [ ! -d /root/.local ] && [ -d "$DATA/.local" ]; then
+      cp -a "$DATA/.local" /root/.local
+  fi
 fi
 
 export PATH="/root/.local/bin:$PATH"

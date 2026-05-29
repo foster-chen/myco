@@ -7,6 +7,7 @@ ARG https_proxy
 ARG no_proxy
 ENV http_proxy=$http_proxy https_proxy=$https_proxy no_proxy=$no_proxy
 COPY server/package.json server/package-lock.json* ./
+COPY server/vendor ./vendor
 RUN npm config set proxy "$http_proxy" && \
     npm config set https-proxy "$https_proxy" && \
     npm config set strict-ssl false && \
@@ -58,6 +59,7 @@ RUN ARCH=$(uname -m) && case "$ARCH" in \
 WORKDIR /app
 
 COPY --from=builder /build/node_modules ./server/node_modules
+COPY --from=builder /build/vendor ./server/vendor
 COPY --from=builder /usr/local/lib/node_modules/@anthropic-ai/claude-code /usr/local/lib/node_modules/@anthropic-ai/claude-code
 COPY --from=builder /usr/local/bin/claude /usr/local/bin/claude
 COPY server/src ./server/src
