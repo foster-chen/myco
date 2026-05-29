@@ -6948,6 +6948,10 @@ html.sidebar-collapsed #files-wrap.files-tree-collapsed #files-tree-pane #files-
   background: transparent;
 }
 .agent-card-claude { color: rgba(120, 200, 140, .95); }
+.agent-card-reasoning { color: rgba(140, 160, 180, .85); font-style: italic; }
+.agent-card-reasoning-summary { cursor: pointer; user-select: none; font-style: italic; }
+.agent-card-reasoning-body { color: rgba(140, 160, 180, .75); white-space: pre-wrap; padding: 6px 0 2px; }
+.agent-card-reasoning[open] .agent-card-reasoning-summary { color: rgba(160, 180, 200, .9); }
 .agent-card-tool   { color: rgba(140, 180, 220, .95); }
 .agent-card-result { color: rgba(180, 200, 160, .85); }
 .agent-card-error  { color: rgba(255, 130, 130, .95); }

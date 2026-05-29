@@ -3157,14 +3157,14 @@ function _maybeNotifyMenuPending(message) {
     if (tgt && tgt.tool) {
       // Permission menu: "claude wants to run Bash(curl …)"
       const argPreview = tgt.input ? String(tgt.input).replace(/\s+/g, ' ').slice(0, 80) : '';
-      title = `⊕ claude wants ${tgt.tool}`;
+      title = `⊕ myco wants ${tgt.tool}`;
       body = argPreview ? `${tgt.tool}(${argPreview})` : `${tgt.tool} — open the chat to allow / deny.`;
     } else {
       // AskUserQuestion: the chat text IS the question. menu.lead
       // (if present) is preferred over the full text body since the
       // server already strips the option enumeration off it.
       const lead = menu.lead ? String(menu.lead) : String(message.text || '');
-      title = '🤔 claude is waiting on a decision';
+      title = `🤔 myco is waiting on a decision`;
       body = lead.replace(/\s+/g, ' ').trim().slice(0, 200);
     }
     const tag = 'myco-menu-' + (menu.hash || (message.meta.transcriptUuid || Date.now()));
@@ -3190,7 +3190,7 @@ function _maybeNotifyTurnComplete(ev) {
     const glyph = ok ? '✓' : '■';
     const durStr = (typeof ev.durationMs === 'number') ? (ev.durationMs / 1000).toFixed(1) + 's' : '';
     const costStr = (typeof ev.totalCostUsd === 'number') ? '$' + ev.totalCostUsd.toFixed(4) : '';
-    const titleBits = [`${glyph} claude finished`, durStr, costStr].filter(Boolean).join(' · ');
+    const titleBits = [`${glyph} myco finished`, durStr, costStr].filter(Boolean).join(' · ');
     const firstLine = ev.result
       ? String(ev.result).replace(/\s+/g, ' ').trim().slice(0, 200)
       : '(no final text — see the chat timeline for tool detail)';
@@ -5000,11 +5000,12 @@ function renderChatMessage(m, isActiveMenu) {
   if (_shouldSkipMessageRender(m)) {
     return '';
   }
-  const fromClaude = m.user === 'claude';
+  const AGENT_USER_NAMES = ['claude', 'alibaba-cn', 'alibaba', 'zhipuai', 'agent'];
+  const fromAgent = AGENT_USER_NAMES.includes(m.user);
   const fromSelf = state.chatUser && m.user === state.chatUser;
   const ts = m.ts ? formatChatTs(m.ts) : '';
   let cls = 'chat-msg';
-  if (fromClaude) cls += ' from-claude';
+  if (fromAgent) cls += ' from-claude';
   if (fromSelf) cls += ' from-self';
   // Chat-only mentions (stamped server-side with meta.kind='mention').
   // Two variants:
@@ -5745,7 +5746,7 @@ function _updateAgentStatusStrip(ev) {
   if (ev.type === 'assistant_text') {
     // Claude is generating its reply — pin the label so it doesn't
     // flap with stale chrome text while the markdown streams.
-    state.claudeStatusLine = 'claude is writing';
+    state.claudeStatusLine = 'myco is writing';
     state.claudeStatusKind = 'thinking';
     state.awaitingClaude = true;
     _renderClaudeTyping();
@@ -5912,6 +5913,10 @@ function _appendAgentEvent(ev) {
     }
   }
 
+  if ((ev.type === 'system_init' || ev.type === 'agent_init_snapshot' || ev.type === 'session_ready') && ev.providerId) {
+    state.agentProviderId = ev.providerId;
+  }
+
   // Capture the SDK's announced model name so the token meter knows
   // whether to use the 200k or 1M context window. system_init fires
   // once at session start, agent_init_snapshot on every reattach.
@@ -6043,6 +6048,34 @@ function _appendAgentEvent(ev) {
   // card whenever the chrome batches between them happened to be
   // visually adjacent (post the chrome-batch-merge bug). The seq
   // gap is now the authoritative break-point.
+  if (ev.type === 'reasoning_text') {
+    try {
+      const prevType = (pane.lastElementChild && pane.lastElementChild.dataset && pane.lastElementChild.dataset.evType) || '(none)';
+      const preview = String(ev.text || '').replace(/\s+/g, ' ').slice(0, 30);
+      console.log('[diag-reasoning-text] ts=' + ev.ts + ' seq=' + (ev.seq || '-') + ' prevType=' + prevType + ' text=' + JSON.stringify(preview));
+    } catch {}
+    const prev = pane.lastElementChild;
+    const prevLastSeq = prev && prev.dataset && prev.dataset.lastSeq ? parseInt(prev.dataset.lastSeq, 10) : null;
+    const evSeq = typeof ev.seq === 'number' ? ev.seq : null;
+    const seqsConsecutive = Number.isFinite(prevLastSeq) && Number.isFinite(evSeq) && evSeq === prevLastSeq + 1;
+    if (prev && prev.dataset && prev.dataset.evType === 'reasoning_text' && seqsConsecutive) {
+      const count = (parseInt(prev.dataset.combineCount || '1', 10)) + 1;
+      prev.dataset.combineCount = String(count);
+      if (Number.isFinite(evSeq)) prev.dataset.lastSeq = String(evSeq);
+      const reasoningBody = prev.querySelector('.agent-card-reasoning-body');
+      if (reasoningBody) {
+        const incomingText = ev.text || '';
+        const prevText = prev.dataset.reasoningText || '';
+        const sep = incomingText.length < 50 && prevText.length < 200 ? '' : '\n\n';
+        const merged = prevText + sep + incomingText;
+        prev.dataset.reasoningText = merged;
+        reasoningBody.textContent = merged;
+      }
+      scrollChatToLatest();
+      return;
+    }
+  }
+
   if (ev.type === 'assistant_text') {
     try {
       const prevType = (pane.lastElementChild && pane.lastElementChild.dataset && pane.lastElementChild.dataset.evType) || '(none)';
@@ -6061,7 +6094,10 @@ function _appendAgentEvent(ev) {
       if (Number.isFinite(evSeq)) prev.dataset.lastSeq = String(evSeq);
       const body = prev.querySelector('.agent-card-body');
       if (body) {
-        const merged = (prev.dataset.assistantText || '') + '\n\n' + (ev.text || '');
+        const incomingText = ev.text || '';
+        const prevText = prev.dataset.assistantText || '';
+        const sep = incomingText.length < 50 && prevText.length < 200 ? '' : '\n\n';
+        const merged = prevText + sep + incomingText;
         prev.dataset.assistantText = merged;
         body.innerHTML = renderMd(merged);
         renderMermaidInContainer(body).catch(() => {});
@@ -6096,11 +6132,22 @@ function _appendAgentEvent(ev) {
   // Non-chrome events that survived to here: assistant_text (first
   // block of a new run — subsequent blocks merge above), tool_use,
   // tool_result, turn_result, fatal, and the catch-all "unknown" body.
-  if (ev.type === 'assistant_text') {
-    // Head is just "<ts> claude" — the body renders the full markdown
-    // immediately below (assistant_text is in AGENT_DEFAULT_EXPANDED,
-    // so the body is visible without a click). The 120-char first-line
-    // preview was redundant with the body underneath.
+if (ev.type === 'reasoning_text') {
+    const details = document.createElement('details');
+    details.className = 'agent-card-reasoning';
+    const summary = document.createElement('summary');
+    summary.className = 'agent-card-reasoning-summary';
+    summary.textContent = '✻ Thinking';
+    details.appendChild(summary);
+    const detailsBody = document.createElement('div');
+    detailsBody.className = 'agent-card-body agent-card-reasoning-body';
+    detailsBody.textContent = ev.text || '';
+    details.appendChild(detailsBody);
+    card.dataset.reasoningText = ev.text || '';
+    if (typeof ev.seq === 'number') card.dataset.lastSeq = String(ev.seq);
+    head.innerHTML += `<span class="agent-card-kind agent-card-reasoning">myco</span>`;
+    card.appendChild(details);
+  } else if (ev.type === 'assistant_text') {
     head.innerHTML += `<span class="agent-card-kind agent-card-claude">myco</span>`;
     body.className += ' agent-card-md';
     body.innerHTML = renderMd(ev.text || '');
