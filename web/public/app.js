@@ -1633,6 +1633,9 @@ function _teardownPreviousSession() {
 // list, chat panes, etc.). Does not start any network I/O.
 function _resetUiForNewSession(id) {
   state.activeId = id;
+  // Auto-refresh: stop all polling from the previous session.
+  _stopArtifactAutoRefresh();
+  _stopFileTreeAutoRefresh();
   // fr-78: per-session chat-input history. Cleared on session switch
   // so each session starts with a fresh recall buffer (a different
   // session's history would be irrelevant context). Live for the
@@ -8462,6 +8465,10 @@ function showArtifactView(type) {
     document.getElementById('btn-' + t)?.classList.toggle('active', t === type);
   }
   loadArtifact(type).catch(() => {});
+  // Auto-refresh: start polling the active artifact view every 5s so
+  // TODOs/Bugs/Features stay current without a manual page refresh.
+  _startArtifactAutoRefresh();
+  _stopFileTreeAutoRefresh();
   // fr-77 r3: when the Plan view is shown, also refresh the bottom
   // Changed-files section (2s cache prevents thrash from rapid
   // re-shows). The handlers (refresh button, collapse, click-to-
@@ -8487,6 +8494,8 @@ function hideArtifactView() {
   document.getElementById(wrapId).hidden = true;
   document.getElementById('btn-' + type)?.classList.remove('active');
   state.artifactView.active = null;
+  // Auto-refresh: stop polling when the artifact view is closed.
+  _stopArtifactAutoRefresh();
   // fr-93: Plan view going away → stop polling git-status.
   if (type === 'plan') _stopPlanChangedFilesAutoRefresh();
   // Phase 9 step 3 retired the terminal + transcript wraps. The chatpane
@@ -8528,15 +8537,17 @@ function clearArtifactBodies() {
   }
 }
 
-async function loadArtifact(type) {
+async function loadArtifact(type, { forceHttp } = {}) {
   if (!ARTIFACT_TYPES.includes(type)) return;
   const sid = state.activeId;
   if (!sid) return;
   const body = document.getElementById(`artifact-body-${type}`);
   if (!body) return;
-  // Prefer the cache populated by the artifacts-init / state-update WS
-  // frames — that's the freshest authoritative state. Tab switches are
-  // instant + always in sync without an HTTP round-trip.
+  // When forceHttp is set (auto-refresh poll), skip the cache and fetch
+  // fresh data from the server so the view stays current without a page
+  // reload. Otherwise prefer the cache populated by the artifacts-init /
+  // state-update WS frames — that's the freshest authoritative state.
+  // Tab switches are instant + always in sync without an HTTP round-trip.
   //
   // ryan-blues bug fix: the cache lookup MUST verify state.artifacts.sessionId
   // === sid. A spawn-new-session flow advances state.activeId BEFORE the
@@ -8549,32 +8560,62 @@ async function loadArtifact(type) {
     (type === 'arch' && typeof cached.markdown === 'string' && cached.markdown.trim()) ||
     (type !== 'arch' && Array.isArray(cached.items) && cached.items.length)
   );
-  if (cachedHas) {
+  if (!forceHttp && cachedHas) {
     renderArtifact(type, cached);
     return;
   }
-  // Cache miss — fall back to HTTP. Happens on cold reload of an
-  // artifact tab before the WS attach delivers artifacts-init, AND
-  // when a session-switch invalidated the cache.
   try {
     const res = await authedFetch(`/sessions/${encodeURIComponent(sid)}/artifact?type=${encodeURIComponent(type)}`);
     if (!res || !res.ok) return;
     const data = await res.json().catch(() => ({}));
     const artifact = data.artifact || data;
-    // Only render if there's actually persisted content; leaving the empty-
-    // state copy in place is friendlier than overwriting it with a blank.
     const hasContent = (type === 'arch' && artifact && artifact.markdown && artifact.markdown.trim())
       || (type !== 'arch' && artifact && Array.isArray(artifact.items) && artifact.items.length);
     if (hasContent) {
       renderArtifact(type, artifact);
-      // Populate cache for the next call — and (re)bind it to sid so
-      // a subsequent lookup for the same session is fast.
       if (state.artifacts.sessionId !== sid) {
         state.artifacts = { sessionId: sid, byType: {} };
       }
       state.artifacts.byType[type] = artifact;
     }
   } catch {}
+}
+
+// Auto-refresh: polls the active artifact view every 5 seconds so
+// TODOs/Bugs/Features stay current without a manual page refresh.
+let _artifactAutoRefreshHandle = null;
+const ARTIFACT_AUTO_REFRESH_MS = 5000;
+function _startArtifactAutoRefresh() {
+  if (_artifactAutoRefreshHandle) return;
+  _artifactAutoRefreshHandle = setInterval(() => {
+    if (document.hidden) return;
+    const active = state.artifactView && state.artifactView.active;
+    if (!active || !state.activeId) return;
+    loadArtifact(active, { forceHttp: true }).catch(() => {});
+  }, ARTIFACT_AUTO_REFRESH_MS);
+}
+function _stopArtifactAutoRefresh() {
+  if (!_artifactAutoRefreshHandle) return;
+  clearInterval(_artifactAutoRefreshHandle);
+  _artifactAutoRefreshHandle = null;
+}
+
+// Auto-refresh: polls the file tree every 5 seconds so the workspace
+// view stays current without a manual page refresh.
+let _fileTreeAutoRefreshHandle = null;
+const FILE_TREE_AUTO_REFRESH_MS = 5000;
+function _startFileTreeAutoRefresh() {
+  if (_fileTreeAutoRefreshHandle) return;
+  _fileTreeAutoRefreshHandle = setInterval(() => {
+    if (document.hidden) return;
+    if (!state.files.visible || !state.activeId) return;
+    loadFileTree(state.files.currentPath || '.');
+  }, FILE_TREE_AUTO_REFRESH_MS);
+}
+function _stopFileTreeAutoRefresh() {
+  if (!_fileTreeAutoRefreshHandle) return;
+  clearInterval(_fileTreeAutoRefreshHandle);
+  _fileTreeAutoRefreshHandle = null;
 }
 
 async function refreshArtifact(type) {
@@ -9907,6 +9948,10 @@ function showFilesView() {
   document.getElementById('files-view-pane').hidden = true;
   document.getElementById('btn-files')?.classList.add('active');
   state.files.visible = true;
+  // Auto-refresh: start polling the file tree every 5s so the workspace
+  // view stays current without a manual page refresh.
+  _startFileTreeAutoRefresh();
+  _stopArtifactAutoRefresh();
   // Same side-by-side intent as showArtifactView: chat stays visible
   // alongside files on desktop, hidden on mobile (mutually exclusive
   // there per _hideMainPaneSiblings).
@@ -9926,6 +9971,8 @@ function hideFilesView() {
   document.getElementById('btn-files')?.classList.remove('active');
   state.files.visible = false;
   state.files.prevView = null;
+  // Auto-refresh: stop polling when the files view is closed.
+  _stopFileTreeAutoRefresh();
   updateChatButton();
   _updateMainPaneLayout();
 }

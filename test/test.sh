@@ -3126,6 +3126,22 @@ test_chat_window() {
   grep -qF 'clearInterval(safetyPollTimer)' server/src/transcript.js \
     && pass "transcript.js: safety poll cleared on unsubscribe" \
     || fail "transcript.js: safety poll not cleared on unsubscribe"
+  # Auto-refresh: artifact views (plan/arch/test) + file-tree view
+  # poll every 5s so TODOs/Bugs/Features and workspace stay current
+  # without a manual page refresh.
+  node_test_result test/artifact-file-tree-autorefresh.test.js "test/artifact-file-tree-autorefresh.test.js (14 cases)"
+  grep -qF '_startArtifactAutoRefresh()' web/public/app.js \
+    && pass "app.js: showArtifactView calls _startArtifactAutoRefresh" \
+    || fail "app.js: showArtifactView missing _startArtifactAutoRefresh"
+  grep -qF '_stopArtifactAutoRefresh()' web/public/app.js \
+    && pass "app.js: hideArtifactView calls _stopArtifactAutoRefresh" \
+    || fail "app.js: hideArtifactView missing _stopArtifactAutoRefresh"
+  grep -qF '_startFileTreeAutoRefresh()' web/public/app.js \
+    && pass "app.js: showFilesView calls _startFileTreeAutoRefresh" \
+    || fail "app.js: showFilesView missing _startFileTreeAutoRefresh"
+  grep -qF '_stopFileTreeAutoRefresh()' web/public/app.js \
+    && pass "app.js: hideFilesView calls _stopFileTreeAutoRefresh" \
+    || fail "app.js: hideFilesView missing _stopFileTreeAutoRefresh"
   # Phase 9 step 2 retired the PTY status-line scraper (spinner
   # regexes, periodic _checkMenu scan, status throttle). Agent mode
   # reports status via SDK system_init / iteration_start events
