@@ -968,6 +968,50 @@ function _shipTimelineInit(session, ws, sessionId, chatBytes, eventBytes, includ
   } catch {}
 }
 
+// Coalesce per-delta assistant_text / reasoning_text events into
+// consolidated blocks for replay. Per-delta streaming (opencode
+// provider) emits one event per token fragment, producing hundreds
+// of tiny events for a single reply. The byte-budget trim then
+// keeps only the tail fragments, truncating the beginning. This
+// function walks the sorted-by-seq event list and merges consecutive-
+// seq runs of the same coalesceable type into one event carrying the
+// full concatenated text, seq of the first event in the run, and ts
+// of the first event. Non-coalesceable events pass through unchanged.
+function _coalesceReplayEvents(events) {
+  if (!Array.isArray(events) || !events.length) return events;
+  const COALESCE_TYPES = new Set(['assistant_text', 'reasoning_text']);
+  const sorted = events.slice().sort((a, b) => (a.seq || 0) - (b.seq || 0));
+  const out = [];
+  let i = 0;
+  while (i < sorted.length) {
+    const ev = sorted[i];
+    if (!COALESCE_TYPES.has(ev.type) || typeof ev.seq !== 'number') {
+      out.push(ev);
+      i++;
+      continue;
+    }
+    const textParts = [ev.text || ''];
+    const firstSeq = ev.seq;
+    const firstTs = ev.ts;
+    const type = ev.type;
+    let j = i + 1;
+    while (j < sorted.length
+      && sorted[j].type === type
+      && typeof sorted[j].seq === 'number'
+      && sorted[j].seq === sorted[j - 1].seq + 1) {
+      textParts.push(sorted[j].text || '');
+      j++;
+    }
+    if (j - i > 1) {
+      out.push({ type, text: textParts.join(''), seq: firstSeq, ts: firstTs });
+    } else {
+      out.push(ev);
+    }
+    i = j;
+  }
+  return out;
+}
+
 // bug-9 round 4 — shared shipper for the agent-replay WS frame.
 // Dedups the buffer (bug-7 round 2 backstop) and byte-trims to the
 // passed-in budget. Used twice on attach: once for the small initial
@@ -999,25 +1043,34 @@ function _shipAgentReplay(session, ws, sessionId, maxBytes, phase, afterSeq) {
   // afterSeq catch-up mode: keep only seq > afterSeq, no byte-trim.
   if (typeof afterSeq === 'number' && afterSeq >= 0) {
     const gap = events.filter((ev) => typeof ev.seq === 'number' && ev.seq > afterSeq);
-    try { ws.send(JSON.stringify({ t: 'agent-replay', events: gap, afterSeq })); } catch {}
-    console.log(`[agent-replay] ${sessionId} ${phase} afterSeq=${afterSeq} → ${gap.length} event(s) (of ${events.length} in buffer)`);
+    const coalesced = _coalesceReplayEvents(gap);
+    try { ws.send(JSON.stringify({ t: 'agent-replay', events: coalesced, afterSeq })); } catch {}
+    console.log(`[agent-replay] ${sessionId} ${phase} afterSeq=${afterSeq} → ${coalesced.length} event(s) coalesced from ${gap.length} raw (of ${events.length} in buffer)`);
     return;
   }
+  // Coalesce per-delta assistant_text / reasoning_text events into
+  // consolidated blocks BEFORE byte-trimming. Per-delta streaming
+  // emits many tiny events (one per token fragment), which makes the
+  // byte budget extremely destructive — a 16 KB budget keeps only
+  // the tail ~40% of a long reply, truncating the beginning. After
+  // coalescing, a 396-event reply becomes ~2 events, and the full
+  // text fits within the budget.
+  const coalesced = _coalesceReplayEvents(events);
   // Byte-trim (bug-9 round 3, parametrized by phase).
-  let trimmed = events;
-  if (events.length && maxBytes > 0) {
+  let trimmed = coalesced;
+  if (coalesced.length && maxBytes > 0) {
     let bytes = 0;
-    let keepFromIdx = events.length;
-    for (let i = events.length - 1; i >= 0; i--) {
+    let keepFromIdx = coalesced.length;
+    for (let i = coalesced.length - 1; i >= 0; i--) {
       let sz;
-      try { sz = JSON.stringify(events[i]).length; } catch { sz = 0; }
+      try { sz = JSON.stringify(coalesced[i]).length; } catch { sz = 0; }
       if (bytes && bytes + sz > maxBytes) break;
       bytes += sz;
       keepFromIdx = i;
     }
     if (keepFromIdx > 0) {
-      trimmed = events.slice(keepFromIdx);
-      console.log(`[agent-replay] ${sessionId} ${phase} byte-trim ${events.length} → ${trimmed.length} events (${bytes} bytes, budget ${maxBytes})`);
+      trimmed = coalesced.slice(keepFromIdx);
+      console.log(`[agent-replay] ${sessionId} ${phase} byte-trim ${coalesced.length} → ${trimmed.length} events (${bytes} bytes, budget ${maxBytes})`);
     }
   }
   try { ws.send(JSON.stringify({ t: 'agent-replay', events: trimmed })); } catch {}

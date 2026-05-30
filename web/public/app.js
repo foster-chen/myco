@@ -8569,15 +8569,11 @@ async function loadArtifact(type, { forceHttp } = {}) {
     if (!res || !res.ok) return;
     const data = await res.json().catch(() => ({}));
     const artifact = data.artifact || data;
-    const hasContent = (type === 'arch' && artifact && artifact.markdown && artifact.markdown.trim())
-      || (type !== 'arch' && artifact && Array.isArray(artifact.items) && artifact.items.length);
-    if (hasContent) {
-      renderArtifact(type, artifact);
-      if (state.artifacts.sessionId !== sid) {
-        state.artifacts = { sessionId: sid, byType: {} };
-      }
-      state.artifacts.byType[type] = artifact;
+    if (state.artifacts.sessionId !== sid) {
+      state.artifacts = { sessionId: sid, byType: {} };
     }
+    state.artifacts.byType[type] = artifact;
+    renderArtifact(type, artifact);
   } catch {}
 }
 
@@ -9322,7 +9318,13 @@ async function onArtifactItemDelete(type, itemId) {
       { method: 'DELETE' }
     );
     if (!res || !res.ok) return;
-    await loadArtifact(type);
+    const data = await res.json().catch(() => ({}));
+    if (data.artifact) {
+      state.artifacts.byType[type] = data.artifact;
+      renderArtifact(type, data.artifact);
+    } else {
+      await loadArtifact(type, { forceHttp: true });
+    }
   } catch (err) {
     console.error('item delete failed', err);
   }

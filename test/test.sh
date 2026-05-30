@@ -2339,6 +2339,13 @@ test_chat_window() {
   # rows (the original bug-7 symptom that 7cb8ed5 only partially
   # fixed via the post-replay wipe).
   node_test_result test/agent-replay-dedup.test.js "test/agent-replay-dedup.test.js (7 cases)"
+  # Per-delta event coalescing regression: per-delta streaming
+  # (opencode provider) emits hundreds of tiny assistant_text /
+  # reasoning_text events per reply. The 16 KB byte-budget trim
+  # keeps only the tail fragments, truncating the beginning on
+  # refresh. _coalesceReplayEvents merges consecutive-seq runs
+  # before byte-trim so the full text survives.
+  node_test_result test/agent-replay-coalesce.test.js "test/agent-replay-coalesce.test.js (13 cases)"
   # bug-10 regression: multiple chrome batches with the same head
   # signature (e.g. five consecutive `× N perm asked · Bash` rows)
   # collapse into ONE row via _mergeIdenticalChromeBatches, invoked
@@ -2917,6 +2924,16 @@ test_chat_window() {
   # cleanup block (gated on state.activeId === s.id) + a simulated
   # state-effect assertion.
   node_test_result test/bug-29-delete-clears-plan.test.js "test/bug-29-delete-clears-plan.test.js (9 cases)"
+  # bug-42: deleting a plan item must immediately remove it from the
+  # Plan view, not persist the stale cache until a filter toggle or
+  # page refresh. Root cause: onArtifactItemDelete used loadArtifact(type)
+  # without { forceHttp: true }, so the cachedHas early-return rendered
+  # stale data. Plus loadArtifact's hasContent gate skipped render + cache
+  # update when items.length === 0 (deleting the last item). Fix:
+  # (1) onArtifactItemDelete reads the DELETE response's artifact field,
+  # updates the cache + calls renderArtifact directly; (2) loadArtifact's
+  # forceHttp path always updates cache + calls renderArtifact.
+  node_test_result test/bug-42-plan-item-delete-stale-cache.test.js "test/bug-42-plan-item-delete-stale-cache.test.js (9 cases)"
   # bug-31: AskUserQuestion modal dismissal recovery. Two failure modes
   # the user reported — (a) backdrop outside-click dismissed the prompt
   # accidentally; (b) once dismissed, the chat-pane reopen affordance
