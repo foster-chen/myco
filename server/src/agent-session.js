@@ -142,6 +142,8 @@ function _matchingInputFor(toolName, toolInput) {
   return '';
 }
 
+const FILE_WRITING_TOOL_NAMES = ['Write', 'Edit', 'MultiEdit'];
+
 class AgentSession extends EventEmitter {
   constructor(sessionId, opts = {}) {
     super();
@@ -845,8 +847,17 @@ class AgentSession extends EventEmitter {
       case 'tool_result':
         this._flushOCTextBuffer();
         this._flushOCReasoningBuffer();
+        const toolInfoOC = this.openToolCalls.get(event.id);
         this.openToolCalls.delete(event.id);
         this._emit({ type: 'tool_result', id: event.id, name: event.name, result: event.result });
+        if (toolInfoOC && !event.is_error) {
+          if (FILE_WRITING_TOOL_NAMES.includes(toolInfoOC.name)) {
+            this.emit('state-update', { kind: 'file-tree-change', path: (toolInfoOC.input && toolInfoOC.input.file_path) || null });
+          }
+          if (toolInfoOC.name === 'Bash') {
+            this.emit('state-update', { kind: 'file-tree-change', path: null });
+          }
+        }
         this._broadcastToolProgress();
         break;
       case 'step_start':
@@ -1050,6 +1061,7 @@ class AgentSession extends EventEmitter {
         } else if (block.type === 'tool_use') {
           this.openToolCalls.set(block.id, {
             name: block.name,
+            input: block.input,
             summary: _summariseToolInput(block.name, block.input),
             ts: new Date().toISOString(),
           });
@@ -1067,6 +1079,7 @@ class AgentSession extends EventEmitter {
     if (m.type === 'user' && m.message && Array.isArray(m.message.content)) {
       for (const block of m.message.content) {
         if (block.type === 'tool_result') {
+          const toolInfo = this.openToolCalls.get(block.tool_use_id);
           this.openToolCalls.delete(block.tool_use_id);
           const content = typeof block.content === 'string'
             ? block.content
@@ -1079,6 +1092,14 @@ class AgentSession extends EventEmitter {
             content,
             isError: !!block.is_error,
           });
+          if (toolInfo && !block.is_error) {
+            if (FILE_WRITING_TOOL_NAMES.includes(toolInfo.name)) {
+              this.emit('state-update', { kind: 'file-tree-change', path: (toolInfo.input && toolInfo.input.file_path) || null });
+            }
+            if (toolInfo.name === 'Bash') {
+              this.emit('state-update', { kind: 'file-tree-change', path: null });
+            }
+          }
           this._broadcastToolProgress();
         }
       }
