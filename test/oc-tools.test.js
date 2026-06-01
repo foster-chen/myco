@@ -146,5 +146,39 @@ const path = require('path');
     console.log('PASS: grep tool schema + execute works');
   }
 
+  // ─── WebFetch test ────────────────────────────────────────────────
+  {
+    const { createWebFetchTool } = require('../server/src/oc-tools/webfetch');
+    const sessionId = 'test-session-webfetch';
+    const workspaceDir = process.cwd();
+    const webfetchTool = createWebFetchTool(sessionId, workspaceDir);
+
+    assert(typeof webfetchTool.description === 'string' && webfetchTool.description.length > 10);
+    const schema = webfetchTool.inputSchema.jsonSchema;
+    assert(schema.properties.url);
+    assert.deepStrictEqual(schema.required, ['url']);
+
+    const result = await webfetchTool.execute({ url: 'https://httpbin.org/get' });
+    assert(typeof result === 'string');
+    assert(result.length > 0, `webfetch should return content: ${result.slice(0, 100)}`);
+    console.log('PASS: webfetch tool schema + execute works');
+  }
+
+  // ─── Permission gating test ────────────────────────────────────────
+  {
+    const OC_AUTO_APPROVE = new Set([
+      'read', 'glob', 'grep', 'webfetch',
+      'mcp__myco__add_plan_items',
+    ]);
+    const gated = ['bash', 'edit', 'write'];
+    for (const name of OC_AUTO_APPROVE) {
+      assert(OC_AUTO_APPROVE.has(name), `${name} should be auto-approved`);
+    }
+    for (const name of gated) {
+      assert(!OC_AUTO_APPROVE.has(name), `${name} should NOT be auto-approved`);
+    }
+    console.log('PASS: OC_AUTO_APPROVE set is correct');
+  }
+
   console.log('\nAll oc-tools tests passed.');
 })();

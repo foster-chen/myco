@@ -27,6 +27,11 @@ const agentConfig = require('./agent-config');
 let agentSdk;
 try { agentSdk = require('@opencode-ai/agent-sdk'); } catch(e) { agentSdk = null; }
 
+const OC_AUTO_APPROVE = new Set([
+  'read', 'glob', 'grep', 'webfetch',
+  'mcp__myco__add_plan_items',
+]);
+
 // Per-session in-memory replay buffer cap. The buffer is hydrated
 // from <cwd>/_myco_/events.jsonl on construction, so this cap is
 // also the LOAD cap (last N events from disk). At ~5 events per
@@ -902,6 +907,11 @@ class AgentSession extends EventEmitter {
     const hookResult = this._preToolUseHookCheck(toolName, toolInput);
     if (hookResult) return hookResult.behavior === 'allow';
 
+    if (OC_AUTO_APPROVE.has(toolName)) {
+      console.log(`[agent-hook] ${this.sessionId} OC auto-approve ${toolName}`);
+      return true;
+    }
+
     const hash = crypto.createHash('sha256').update(JSON.stringify({ toolName, toolInput })).digest('hex').slice(0, 16);
     const menu = { hash, toolName, toolInput };
     this.pendingMenus.set(hash, menu);
@@ -914,8 +924,8 @@ class AgentSession extends EventEmitter {
   }
 
   _resolveOCTools() {
-    const { createMycoMcpToolsOC } = require('./myco-mcp');
-    return createMycoMcpToolsOC(this.sessionId);
+    const { createOCTools } = require('./oc-tools/index');
+    return createOCTools(this.sessionId, this.cwd);
   }
 
   _readSystemPrompt() {
