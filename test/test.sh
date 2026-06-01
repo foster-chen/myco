@@ -833,6 +833,7 @@ test_best_practices_template() {
     || fail "migrate-plan-ids.js moved out of repo root (lives under scripts/)"
   node_test_result test/migrate-plan-ids.test.js "test/migrate-plan-ids.test.js (4 cases)"
   node_test_result test/chat-routing.test.js "test/chat-routing.test.js (7 cases)"
+  node_test_result test/oc-tools.test.js "test/oc-tools.test.js (9 cases — registration + 7 tool execute + permission gating)"
 }
 
 test_conv_view_css() {
