@@ -128,5 +128,23 @@ const path = require('path');
     console.log('PASS: glob tool schema + execute works');
   }
 
+  // ─── Grep test ────────────────────────────────────────────────────
+  {
+    const { createGrepTool } = require('../server/src/oc-tools/grep');
+    const sessionId = 'test-session-grep';
+    const workspaceDir = process.cwd();
+    const grepTool = createGrepTool(sessionId, workspaceDir);
+
+    assert(typeof grepTool.description === 'string' && grepTool.description.length > 10);
+    const schema = grepTool.inputSchema.jsonSchema;
+    assert(schema.properties.pattern);
+    assert.deepStrictEqual(schema.required, ['pattern']);
+
+    const result = await grepTool.execute({ pattern: 'createMycoMcpServer', include: '*.js' });
+    assert(typeof result === 'string');
+    assert(result.includes('myco-mcp'), `grep should find myco-mcp references: ${result.slice(0, 200)}`);
+    console.log('PASS: grep tool schema + execute works');
+  }
+
   console.log('\nAll oc-tools tests passed.');
 })();
