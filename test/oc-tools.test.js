@@ -110,5 +110,23 @@ const path = require('path');
     console.log('PASS: write tool schema + execute works');
   }
 
+  // ─── Glob test ────────────────────────────────────────────────────
+  {
+    const { createGlobTool } = require('../server/src/oc-tools/glob');
+    const sessionId = 'test-session-glob';
+    const workspaceDir = process.cwd();
+    const globTool = createGlobTool(sessionId, workspaceDir);
+
+    assert(typeof globTool.description === 'string' && globTool.description.length > 10);
+    const schema = globTool.inputSchema.jsonSchema;
+    assert(schema.properties.pattern);
+    assert.deepStrictEqual(schema.required, ['pattern']);
+
+    const result = await globTool.execute({ pattern: 'test/*.test.js' });
+    assert(typeof result === 'string', `glob execute should return string: ${typeof result}`);
+    assert(result.includes('mcp-format-switch'), `glob should find test files: ${result.slice(0, 200)}`);
+    console.log('PASS: glob tool schema + execute works');
+  }
+
   console.log('\nAll oc-tools tests passed.');
 })();
