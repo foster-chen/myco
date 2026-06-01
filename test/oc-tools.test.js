@@ -83,7 +83,7 @@ const path = require('path');
       oldString: 'hello world',
       newString: 'hello universe',
     });
-    assert(result.includes('successfully'), `edit should report success: ${result}`);
+    assert(result.toLowerCase().includes('successfully'), `edit should report success: ${result}`);
     const updated = fs.readFileSync(testFile, 'utf8');
     assert(updated.includes('hello universe'), `file should contain new string: ${updated}`);
     console.log('PASS: edit tool schema + execute works');
@@ -98,7 +98,7 @@ const path = require('path');
     const writeTool = createWriteTool(sessionId, tmpDir);
 
     assert(typeof writeTool.description === 'string' && writeTool.description.length > 10);
-    const schema = writeTool.inputSchema;
+    const schema = writeTool.inputSchema.jsonSchema;
     assert(schema.properties.filePath);
     assert(schema.properties.content);
     assert.deepStrictEqual(schema.required, ['filePath', 'content']);
