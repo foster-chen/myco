@@ -1628,6 +1628,7 @@ function requireAdmin(req, res, next) {
 const ENV_KEYS = [
   'ANTHROPIC_API_KEY',
   'MYCO_OPENAI_API_KEY',
+  'MYCO_ALIBABA_CN_API_KEY',
   'MYCO_AGENT_API_KEY',
   'MYCO_AGENT_PROVIDER',
   'MYCO_AGENT_MODEL',

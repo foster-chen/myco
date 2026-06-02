@@ -35,7 +35,7 @@ function resolve() {
     }
   }
 
-  if (providerId !== 'anthropic' && !apiKey) {
+  if (defaults.id !== 'anthropic' && !apiKey) {
     const envVarName = PROVIDER_ENV_VARS[providerId] || 'MYCO_AGENT_API_KEY';
     throw new Error(
       `No API key for provider ${providerId}. Set ${envVarName} or MYCO_AGENT_API_KEY in .env.`

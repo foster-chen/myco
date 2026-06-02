@@ -5,7 +5,8 @@ const assert = require('assert');
 const origEnv = {};
 const envKeys = [
   'MYCO_AGENT_PROVIDER', 'MYCO_AGENT_API_KEY', 'ANTHROPIC_API_KEY',
-  'MYCO_OPENAI_API_KEY', 'MYCO_AGENT_MODEL', 'MYCO_AUX_MODEL', 'MYCO_AGENT_BASE_URL',
+  'MYCO_OPENAI_API_KEY', 'MYCO_ALIBABA_CN_API_KEY',
+  'MYCO_AGENT_MODEL', 'MYCO_AUX_MODEL', 'MYCO_AGENT_BASE_URL',
 ];
 
 function saveEnv() {
@@ -83,6 +84,19 @@ const cfg7 = agentConfig.resolve();
 assert.strictEqual(cfg7.apiKey, undefined);
 assert.strictEqual(cfg7.providerId, 'anthropic');
 console.log('PASS: anthropic config without explicit key');
+
+restoreEnv(); setEnv({ MYCO_AGENT_PROVIDER: 'alibaba-cn', MYCO_AGENT_API_KEY: 'sk-dash-test' });
+const cfg8 = agentConfig.resolve();
+assert.strictEqual(cfg8.providerId, 'openai');
+assert.strictEqual(cfg8.apiKey, 'sk-dash-test');
+assert.strictEqual(cfg8.model, 'glm-5.1');
+assert.strictEqual(cfg8.baseUrl, 'https://dashscope.aliyuncs.com/compatible-mode/v1');
+console.log('PASS: alibaba-cn config routes through openai path');
+
+restoreEnv(); setEnv({ MYCO_AGENT_PROVIDER: 'alibaba-cn', MYCO_ALIBABA_CN_API_KEY: 'sk-dash-specific' });
+const cfg9 = agentConfig.resolve();
+assert.strictEqual(cfg9.apiKey, 'sk-dash-specific');
+console.log('PASS: alibaba-cn provider-specific API key');
 
 restoreEnv();
 console.log('All agent-config tests passed');

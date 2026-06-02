@@ -648,126 +648,146 @@ class AgentSession extends EventEmitter {
     if (!this.alive || this._iterating) return;
     this._iterating = true;
 
-    const { apiKey, model, baseUrl } = agentConfig.resolve();
+    try {
+      const { apiKey, model, baseUrl } = agentConfig.resolve();
 
-    const { Agent, run, setDefaultOpenAIClient, OpenAIProvider, setDefaultModelProvider } = require('@openai/agents');
-    const OpenAI = require('openai');
-    const { createOpenAITools } = require('./openai-tools/index');
+      const { Agent, run, setDefaultOpenAIClient, OpenAIProvider, setDefaultModelProvider } = require('@openai/agents');
+      const OpenAI = require('openai');
+      const { createOpenAITools } = require('./openai-tools/index');
 
-    if (baseUrl && baseUrl !== 'https://api.openai.com/v1') {
-      const provider = new OpenAIProvider({
-        baseURL: baseUrl,
-        apiKey,
-        useResponses: false,
-      });
-      setDefaultModelProvider(provider);
-    } else {
-      const client = new OpenAI({ apiKey });
-      setDefaultOpenAIClient(client);
-    }
-
-    const MAX_ATTEMPTS = 3;
-    const BACKOFF_MS = [1000, 4000, 16000];
-
-    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-      try {
-        this._abortController = new AbortController();
-
-        const tools = createOpenAITools(this.sessionId, this.cwd);
-
-        const agent = new Agent({
-          name: 'myco-agent',
-          model,
-          instructions: this._buildSystemPrompt(),
-          tools,
-          toolUseBehavior: 'run_llm_again',
+      if (baseUrl && baseUrl !== 'https://api.openai.com/v1') {
+        const provider = new OpenAIProvider({
+          baseURL: baseUrl,
+          apiKey,
+          useResponses: false,
         });
+        setDefaultModelProvider(provider);
+      } else {
+        const client = new OpenAI({ apiKey });
+        setDefaultOpenAIClient(client);
+      }
 
-        let input;
-        if (this._ocRunState) {
-          input = this._ocRunState;
-        } else {
-          input = this._msgQueue || this._buildInitialPrompt();
-        }
+      const MAX_ATTEMPTS = 3;
+      const BACKOFF_MS = [1000, 4000, 16000];
 
-        let runOpts = {
-          stream: true,
-          signal: this._abortController.signal,
-          maxTurns: null,
-        };
+      for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+        try {
+          this._abortController = new AbortController();
 
-        if (this.openaiResponseId && !this._ocRunState) {
-          runOpts.previousResponseId = this.openaiResponseId;
-        }
+          const tools = createOpenAITools(this.sessionId, this.cwd);
 
-        this._emit({ type: 'iteration_start', attempt });
+          const agent = new Agent({
+            name: 'myco-agent',
+            model,
+            instructions: this._buildSystemPrompt(),
+            tools,
+            toolUseBehavior: 'run_llm_again',
+          });
 
-        let result = await run(agent, input, runOpts);
+          let input;
+          if (this._ocRunState) {
+            input = this._ocRunState;
+          } else {
+            input = this._msgQueue || this._buildInitialPrompt();
+          }
 
-        for await (const event of result) {
-          this._adaptOpenAIEvent(event);
-        }
-        await result.completed;
+          let runOpts = {
+            stream: true,
+            signal: this._abortController.signal,
+            maxTurns: null,
+          };
 
-        if (result.interruptions && result.interruptions.length > 0) {
-          this._ocRunState = result.state;
-          await this._handleOCInterruptions(result.interruptions, result.state);
+          if (this.openaiResponseId && !this._ocRunState) {
+            runOpts.previousResponseId = this.openaiResponseId;
+          }
+
+          this._emit({ type: 'iteration_start', attempt });
+
+          let result = await run(agent, input, runOpts);
+
+          for await (const event of result) {
+            this._adaptOpenAIEvent(event);
+          }
+          await result.completed;
+
+          if (result.interruptions && result.interruptions.length > 0) {
+            this._ocRunState = result.state;
+            await this._handleOCInterruptions(result.interruptions, result.state);
+            this._iterating = false;
+            return this._ensureIterationOpenAI();
+          }
+
+          this.openaiResponseId = result.lastResponseId;
+          this._persistOpenaiResponseId();
+
+          this._emit({
+            type: 'turn_result',
+            text: result.finalOutput || '',
+            model,
+            providerId: 'openai',
+          });
+
           this._iterating = false;
-          return this._ensureIterationOpenAI();
-        }
+          this._msgQueue = null;
+          this._abortController = null;
+          this._ocRunState = null;
 
-        this.openaiResponseId = result.lastResponseId;
+          if (this._pendingRestart) {
+            this._executeRestart();
+          }
 
-        this._emit({
-          type: 'turn_result',
-          text: result.finalOutput || '',
-          model,
-          providerId: 'openai',
-        });
+          this.emit('idle');
+          return;
 
-        this._iterating = false;
-        this._msgQueue = null;
-        this._abortController = null;
-        this._ocRunState = null;
+        } catch (err) {
+          if (this._abortController && this._abortController.signal.aborted) {
+            this._emit({ type: 'iteration_aborted' });
+            this._iterating = false;
+            this.emit('idle');
+            return;
+          }
 
-        if (this._pendingRestart) {
-          this._executeRestart();
-        }
+          const isResumeFailure = err.status === 404 && this.openaiResponseId;
+          if (isResumeFailure) {
+            this.openaiResponseId = null;
+            this._emit({ type: 'resume_failed', reason: 'previous_response_id expired or invalid' });
+            attempt--;
+            continue;
+          }
 
-        this.emit('idle');
-        return;
+          if (this._isRecoverableOC(err)) {
+            await this._emitRetryAndWaitOC(err, attempt, BACKOFF_MS);
+            continue;
+          }
 
-      } catch (err) {
-        if (this._abortController && this._abortController.signal.aborted) {
-          this._emit({ type: 'iteration_aborted' });
+          this._emit({ type: 'fatal', error: err.message, providerId: 'openai' });
           this._iterating = false;
           this.emit('idle');
           return;
         }
-
-        const isResumeFailure = err.status === 404 && this.openaiResponseId;
-        if (isResumeFailure) {
-          this.openaiResponseId = null;
-          this._emit({ type: 'resume_failed', reason: 'previous_response_id expired or invalid' });
-          attempt--;
-          continue;
-        }
-
-        if (this._isRecoverableOC(err)) {
-          await this._emitRetryAndWaitOC(err, attempt, BACKOFF_MS);
-          continue;
-        }
-
-        this._emit({ type: 'fatal', error: err.message, providerId: 'openai' });
-        this._iterating = false;
-        this.emit('idle');
-        return;
       }
+
+      this._emit({ type: 'fatal', error: 'Max retry attempts exhausted', providerId: 'openai' });
+    } catch (initErr) {
+      this._emit({ type: 'fatal', error: initErr.message, providerId: 'openai' });
     }
 
-    this._emit({ type: 'fatal', error: 'Max retry attempts exhausted', providerId: 'openai' });
     this._iterating = false;
     this.emit('idle');
+  }
+
+  _persistOpenaiResponseId() {
+    if (!this.openaiResponseId) return;
+    try {
+      const sessionsMod = require('./sessions');
+      const rec = sessionsMod.getSessionRecord && sessionsMod.getSessionRecord(this.sessionId);
+      if (rec) {
+        rec.openaiResponseId = this.openaiResponseId;
+        sessionsMod.saveStore();
+      }
+    } catch (err) {
+      console.error(`[agent-session] failed to persist openaiResponseId: ${err.message}`);
+    }
   }
 
   _buildInitialPrompt() {
@@ -811,11 +831,8 @@ class AgentSession extends EventEmitter {
       const item = event.item;
 
       if (name === 'message_output_created') {
-        if (item && item.content) {
-          const text = item.content
-            .filter(c => c.type === 'output_text')
-            .map(c => c.text)
-            .join('\n');
+        if (item) {
+          const text = item.content;
           if (text) {
             this._emit({ type: 'assistant_text', text, providerId: 'openai' });
             this._persistAssistantTextToRecChat(text);
