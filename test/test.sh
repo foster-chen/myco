@@ -1954,6 +1954,24 @@ test_openai_sdk_static() {
   test "$count" -eq 0 \
     && pass "no hardcoded api.openai.com URLs outside agent-config.js" \
     || fail "hardcoded api.openai.com URLs found outside agent-config.js"
+
+  echo "  Checking alibaba-cn provider support in agent-config..."
+  grep -q "alibaba-cn" server/src/agent-config.js \
+    && pass "agent-config.js: alibaba-cn provider recognized" \
+    || fail "agent-config.js: alibaba-cn provider missing"
+  grep -q "MYCO_ALIBABA_CN_API_KEY" server/src/agent-config.js \
+    && pass "agent-config.js: MYCO_ALIBABA_CN_API_KEY env var referenced" \
+    || fail "agent-config.js: MYCO_ALIBABA_CN_API_KEY env var missing"
+
+  echo "  Checking _persistOpenaiResponseId method..."
+  grep -q "_persistOpenaiResponseId" server/src/agent-session.js \
+    && pass "agent-session.js: _persistOpenaiResponseId method present" \
+    || fail "agent-session.js: _persistOpenaiResponseId method missing"
+
+  echo "  Checking _adaptOpenAIEvent does not call .filter on item.content..."
+  grep -q "item.content.filter" server/src/agent-session.js \
+    && fail "agent-session.js: item.content.filter() used — RunMessageOutputItem.content is a string getter, not an array" \
+    || pass "agent-session.js: item.content.filter() not used (correct — content is string getter)"
 }
 
 run_static_checks() {
@@ -2965,8 +2983,9 @@ test_chat_window() {
   # buildIdentity logic (4 cases) + auth.profileByLogin export +
   # agent-session.js static-grep guards for the env-injection wiring.
   node_test_result test/fr-26-git-author-identity.test.js "test/fr-26-git-author-identity.test.js (10 cases)"
-  node_test_result test/agent-config.test.js "test/agent-config.test.js (9 cases)"
+  node_test_result test/agent-config.test.js "test/agent-config.test.js (11 cases)"
   node_test_result test/oc-tools.test.js "test/oc-tools.test.js (8 cases)"
+  node_test_result test/adapt-openai-event.test.js "test/adapt-openai-event.test.js (3 cases — _adaptOpenAIEvent content-string regression)"
   # bug-46: /artifact/vote returned 403 for any authenticated user
   # who wasn't the session owner / admin / explicit viewer (fr-87
   # private-by-default gate). But the voters[] schema +
