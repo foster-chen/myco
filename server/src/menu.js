@@ -100,7 +100,7 @@ function broadcastMenuToChat(sessionId, session, menu, target) {
   };
   sessionsMod.appendChatMessage(sessionId, msg);
   session.emit('chat', msg);
-  console.log(`[menu] ${sessionId} broadcast ${menu.kind}${menu.multi ? ' (MULTI)' : ''} with ${menu.options.length} options: ${JSON.stringify(menu.question).slice(0, 80)}`);
+  console.log(`[menu] ${sessionId} broadcast ${menu.kind || 'generic'}${menu.multi ? ' (MULTI)' : ''} with ${menu.options.length} options: ${JSON.stringify(menu.question || '').slice(0, 80)}`);
   // Multi-select diagnostic: dump per-option {n, label, checkbox, checked}
   // so we can see which lines matched MENU_CHECKBOX_RE. Options that
   // SHOULD be toggles but render without `checkbox: true` are the most

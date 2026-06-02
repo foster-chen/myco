@@ -6257,6 +6257,10 @@ const _AGENT_TOOL_ICONS = {
   WebSearch: '🌐', WebFetch: '🌐',
   Task: '🤖', AskUserQuestion: '❓',
   Monitor: '👀',
+  read_file: '📖', write_file: '✏️', edit_file: '✏️',
+  bash: '$', glob: '🔎', grep: '🔎',
+  web_fetch: '🌐',
+  add_plan_items: '📋',
 };
 
 function _agentToolIcon(name) {
@@ -7786,10 +7790,10 @@ function _chromeShortLabel(ev) {
 // pattern, URL, query. Kept terse (≤120 chars) so the row stays scannable.
 function _agentToolSummary(name, input) {
   const i = input || {};
-  if (name === 'Bash')                          return '$ ' + String(i.command || '').slice(0, 118);
-  if (['Read', 'Edit', 'Write'].includes(name)) return String(i.file_path || '').slice(0, 120);
-  if (['Glob', 'Grep'].includes(name))          return String(i.pattern || i.query || '').slice(0, 120);
-  if (name === 'WebFetch')                      return String(i.url || '').slice(0, 120);
+  if (name === 'Bash' || name === 'bash')                          return '$ ' + String(i.command || '').slice(0, 118);
+  if (['Read', 'Edit', 'Write', 'read_file', 'edit_file', 'write_file'].includes(name)) return String(i.file_path || i.filePath || '').slice(0, 120);
+  if (['Glob', 'Grep', 'glob', 'grep'].includes(name))          return String(i.pattern || i.query || '').slice(0, 120);
+  if (name === 'WebFetch' || name === 'web_fetch')              return String(i.url || '').slice(0, 120);
   if (name === 'WebSearch')                     return '"' + String(i.query || '').slice(0, 116) + '"';
   if (name === 'TodoWrite')                     return '(todo list update)';
   if (name === 'Task')                          return String(i.subagent_type || i.description || '').slice(0, 120);
