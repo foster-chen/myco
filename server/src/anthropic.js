@@ -7,12 +7,17 @@
 // gracefully instead of breaking the request that triggered the call.
 
 const https = require('https');
+const agentConfig = require('./agent-config');
 
 const ENDPOINT = 'https://api.anthropic.com/v1/messages';
 const DEFAULT_MODEL = 'claude-haiku-4-5-20251001';
 const DEFAULT_TIMEOUT_MS = 30000;
 
 function callAnthropic({ system, userMessage, model = DEFAULT_MODEL, maxTokens = 200, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+  const { providerId, apiKey: resolvedApiKey, baseUrl } = agentConfig.resolve();
+  if (providerId === 'openai') {
+    return callOpenAICompatible({ system, userMessage, model, maxTokens, timeoutMs, apiKey: resolvedApiKey, baseUrl });
+  }
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return Promise.resolve(null);
   if (!userMessage) return Promise.resolve(null);
@@ -58,4 +63,45 @@ function callAnthropic({ system, userMessage, model = DEFAULT_MODEL, maxTokens =
   });
 }
 
-module.exports = { callAnthropic, DEFAULT_MODEL };
+async function callOpenAICompatible({ system, userMessage, model, maxTokens, timeoutMs, apiKey, baseUrl }) {
+  const effectiveBaseUrl = baseUrl || 'https://api.openai.com/v1';
+  const effectiveModel = model || 'gpt-4o-mini';
+  const effectiveMaxTokens = maxTokens || 200;
+  const effectiveTimeout = timeoutMs || 30000;
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), effectiveTimeout);
+
+    const body = {
+      model: effectiveModel,
+      max_tokens: effectiveMaxTokens,
+      messages: [
+        ...(system ? [{ role: 'system', content: system }] : []),
+        { role: 'user', content: userMessage },
+      ],
+    };
+
+    const response = await fetch(`${effectiveBaseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeout);
+
+    if (!response.ok) return null;
+
+    const data = await response.json();
+    const text = data.choices?.[0]?.message?.content;
+    return text || null;
+  } catch (err) {
+    return null;
+  }
+}
+
+module.exports = { callAnthropic, callOpenAICompatible, DEFAULT_MODEL };

@@ -8,6 +8,7 @@
 // session works here too.
 
 const { stripAnsi, tailLines, formatChat } = require('./text-utils');
+const agentConfig = require('./agent-config');
 
 const TIMEOUT_MS = 60000;
 const ASSISTANT_USER = 'claude';
@@ -62,6 +63,10 @@ function buildPrompt({ chatHistory, scrollback, lastMessage }) {
 // faster (no process startup cost). Output: drains the streaming
 // result to a single text string for caller compatibility.
 async function runClaudeP(cwd, promptBody) {
+  const { providerId, auxModel, apiKey, baseUrl } = agentConfig.resolve();
+  if (providerId === 'openai') {
+    return runOpenAIP(cwd, promptBody, auxModel, apiKey, baseUrl);
+  }
   const { query } = require('@anthropic-ai/claude-agent-sdk');
   const ac = new AbortController();
   const timer = setTimeout(() => { try { ac.abort(); } catch {} }, TIMEOUT_MS);
@@ -102,6 +107,41 @@ async function runClaudeP(cwd, promptBody) {
   clearTimeout(timer);
   const text = (finalText || assistantText).trim();
   return text || '(claude returned no text)';
+}
+
+async function runOpenAIP(cwd, promptBody, model, apiKey, baseUrl) {
+  const { Agent, run, setDefaultOpenAIClient, OpenAIProvider, setDefaultModelProvider } = require('@openai/agents');
+  const OpenAI = require('openai');
+
+  const abortController = new AbortController();
+  const timeout = setTimeout(() => { try { abortController.abort(); } catch {} }, TIMEOUT_MS);
+
+  try {
+    if (baseUrl && baseUrl !== 'https://api.openai.com/v1') {
+      setDefaultModelProvider(new OpenAIProvider({ baseURL: baseUrl, apiKey, useResponses: false }));
+    } else {
+      setDefaultOpenAIClient(new OpenAI({ apiKey }));
+    }
+
+    const agent = new Agent({
+      name: 'myco-btw',
+      model,
+      instructions: ASSISTANT_INSTRUCTIONS,
+      tools: [],
+    });
+
+    const result = await run(agent, promptBody, {
+      signal: abortController.signal,
+      maxTurns: 1,
+    });
+
+    clearTimeout(timeout);
+    return (result.finalOutput || '').trim() || '(openai returned no text)';
+  } catch (err) {
+    clearTimeout(timeout);
+    if (abortController.signal.aborted) return '(openai timed out)';
+    return `(openai error: ${err.message || String(err)})`;
+  }
 }
 
 function askAssistant({ cwd, chatHistory, scrollback, lastMessage }) {

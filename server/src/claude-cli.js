@@ -14,9 +14,14 @@
 // over child_process.spawn. Now uses @anthropic-ai/claude-agent-sdk
 // in-process — same auth, no PATH dep, faster (no process startup).
 
+const agentConfig = require('./agent-config');
 const DEFAULT_TIMEOUT_MS = 120000;
 
 async function callClaudeCli({ system, userMessage, cwd, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+  const { providerId, auxModel, apiKey, baseUrl } = agentConfig.resolve();
+  if (providerId === 'openai') {
+    return callOpenAICli({ system, userMessage, cwd, timeoutMs, model: auxModel, apiKey, baseUrl });
+  }
   if (!userMessage) return null;
   const { query } = require('@anthropic-ai/claude-agent-sdk');
   const ac = new AbortController();
@@ -66,4 +71,44 @@ async function callClaudeCli({ system, userMessage, cwd, timeoutMs = DEFAULT_TIM
   return text || null;
 }
 
-module.exports = { callClaudeCli };
+async function callOpenAICli({ system, userMessage, cwd, timeoutMs, model, apiKey, baseUrl }) {
+  const { Agent, run, setDefaultOpenAIClient, OpenAIProvider, setDefaultModelProvider } = require('@openai/agents');
+  const OpenAI = require('openai');
+
+  const abortController = new AbortController();
+  const timeout = setTimeout(() => {
+    try { abortController.abort(); } catch {}
+    console.error(`[openai-cli] timed out after ${timeoutMs}ms`);
+  }, timeoutMs || DEFAULT_TIMEOUT_MS);
+
+  try {
+    if (baseUrl && baseUrl !== 'https://api.openai.com/v1') {
+      setDefaultModelProvider(new OpenAIProvider({ baseURL: baseUrl, apiKey, useResponses: false }));
+    } else {
+      setDefaultOpenAIClient(new OpenAI({ apiKey }));
+    }
+
+    const agent = new Agent({
+      name: 'myco-cli',
+      model,
+      instructions: system || 'You are a helpful assistant.',
+      tools: [],
+    });
+
+    const result = await run(agent, userMessage, {
+      signal: abortController.signal,
+      maxTurns: 1,
+    });
+
+    clearTimeout(timeout);
+    const text = (result.finalOutput || '').trim();
+    return text || null;
+  } catch (err) {
+    clearTimeout(timeout);
+    if (abortController.signal.aborted) return null;
+    console.error(`[openai-cli] error: ${err.message || String(err)}`);
+    return null;
+  }
+}
+
+module.exports = { callClaudeCli, callOpenAICli };
