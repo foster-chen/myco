@@ -23,6 +23,7 @@ const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
 const { query } = require('@anthropic-ai/claude-agent-sdk');
+const agentConfig = require('./agent-config');
 
 // Per-session in-memory replay buffer cap. The buffer is hydrated
 // from <cwd>/_myco_/events.jsonl on construction, so this cap is
@@ -237,6 +238,9 @@ class AgentSession extends EventEmitter {
     // resolveMenuPick(hash, n) to settle the pending promise so the
     // SDK iteration can continue with the user's choice.
     this._pendingPermissions = new Map();
+    this._pendingOCApprovals = new Map();
+    this._ocRunState = null;
+    this.openaiResponseId = opts.resumeOpenaiResponseId || null;
 
     // Always emit a ready event so the browser's event-log pane has
     // something visible from the moment the WS attaches — otherwise a
@@ -285,6 +289,10 @@ class AgentSession extends EventEmitter {
   // escapes the retry loop immediately. Non-recoverable errors (auth
   // failures, validation) fatal on the first attempt without retry.
   async _ensureIteration() {
+    const { providerId } = agentConfig.resolve();
+    if (providerId === 'openai') {
+      return this._ensureIterationOpenAI();
+    }
     if (!this.alive || this._iterating) return;
     this._iterating = true;
 
@@ -636,6 +644,299 @@ class AgentSession extends EventEmitter {
     }
   }
 
+  async _ensureIterationOpenAI() {
+    if (!this.alive || this._iterating) return;
+    this._iterating = true;
+
+    const { apiKey, model, baseUrl } = agentConfig.resolve();
+
+    const { Agent, run, setDefaultOpenAIClient, OpenAIProvider, setDefaultModelProvider } = require('@openai/agents');
+    const OpenAI = require('openai');
+    const { createOpenAITools } = require('./openai-tools/index');
+
+    if (baseUrl && baseUrl !== 'https://api.openai.com/v1') {
+      const provider = new OpenAIProvider({
+        baseURL: baseUrl,
+        apiKey,
+        useResponses: false,
+      });
+      setDefaultModelProvider(provider);
+    } else {
+      const client = new OpenAI({ apiKey });
+      setDefaultOpenAIClient(client);
+    }
+
+    const MAX_ATTEMPTS = 3;
+    const BACKOFF_MS = [1000, 4000, 16000];
+
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      try {
+        this._abortController = new AbortController();
+
+        const tools = createOpenAITools(this.sessionId, this.cwd);
+
+        const agent = new Agent({
+          name: 'myco-agent',
+          model,
+          instructions: this._buildSystemPrompt(),
+          tools,
+          toolUseBehavior: 'run_llm_again',
+        });
+
+        let input;
+        if (this._ocRunState) {
+          input = this._ocRunState;
+        } else {
+          input = this._msgQueue || this._buildInitialPrompt();
+        }
+
+        let runOpts = {
+          stream: true,
+          signal: this._abortController.signal,
+          maxTurns: null,
+        };
+
+        if (this.openaiResponseId && !this._ocRunState) {
+          runOpts.previousResponseId = this.openaiResponseId;
+        }
+
+        this._emit({ type: 'iteration_start', attempt });
+
+        let result = await run(agent, input, runOpts);
+
+        for await (const event of result) {
+          this._adaptOpenAIEvent(event);
+        }
+        await result.completed;
+
+        if (result.interruptions && result.interruptions.length > 0) {
+          this._ocRunState = result.state;
+          await this._handleOCInterruptions(result.interruptions, result.state);
+          this._iterating = false;
+          return this._ensureIterationOpenAI();
+        }
+
+        this.openaiResponseId = result.lastResponseId;
+
+        this._emit({
+          type: 'turn_result',
+          text: result.finalOutput || '',
+          model,
+          providerId: 'openai',
+        });
+
+        this._iterating = false;
+        this._msgQueue = null;
+        this._abortController = null;
+        this._ocRunState = null;
+
+        if (this._pendingRestart) {
+          this._executeRestart();
+        }
+
+        this.emit('idle');
+        return;
+
+      } catch (err) {
+        if (this._abortController && this._abortController.signal.aborted) {
+          this._emit({ type: 'iteration_aborted' });
+          this._iterating = false;
+          this.emit('idle');
+          return;
+        }
+
+        const isResumeFailure = err.status === 404 && this.openaiResponseId;
+        if (isResumeFailure) {
+          this.openaiResponseId = null;
+          this._emit({ type: 'resume_failed', reason: 'previous_response_id expired or invalid' });
+          attempt--;
+          continue;
+        }
+
+        if (this._isRecoverableOC(err)) {
+          await this._emitRetryAndWaitOC(err, attempt, BACKOFF_MS);
+          continue;
+        }
+
+        this._emit({ type: 'fatal', error: err.message, providerId: 'openai' });
+        this._iterating = false;
+        this.emit('idle');
+        return;
+      }
+    }
+
+    this._emit({ type: 'fatal', error: 'Max retry attempts exhausted', providerId: 'openai' });
+    this._iterating = false;
+    this.emit('idle');
+  }
+
+  _buildInitialPrompt() {
+    if (this._pendingPrePush && this._pendingPrePush.length > 0) {
+      const msgs = this._pendingPrePush.map(e => e.message.content);
+      this._pendingPrePush = [];
+      return msgs.join('\n');
+    }
+    return 'Hello';
+  }
+
+  _buildSystemPrompt() {
+    return `You are myco-agent, an autonomous software engineering assistant. You can use tools to read, write, edit files, run bash commands, search code, and fetch web content. Follow the project's CLAUDE.md instructions. Work from ${this.cwd}.`;
+  }
+
+  _isRecoverableOC(err) {
+    if (err.status === 429) return true;
+    if (err.status >= 500 && err.status < 600) return true;
+    if (err.code === 'ECONNRESET' || err.code === 'ETIMEDOUT') return true;
+    return false;
+  }
+
+  _emitRetryAndWaitOC(err, attempt, backoffMs) {
+    const ms = backoffMs[Math.min(attempt, backoffMs.length - 1)] || 16000;
+    this._emit({ type: 'retry', attempt, error: err.message, providerId: 'openai' });
+    return new Promise(r => setTimeout(r, ms));
+  }
+
+  _adaptOpenAIEvent(event) {
+    if (event.type === 'raw_model_stream_event') {
+      const data = event.data;
+      if (data && data.type === 'response.output_text.delta' && data.delta) {
+        this._emit({ type: 'assistant_text', text: data.delta, providerId: 'openai' });
+        this._persistAssistantTextToRecChat(data.delta);
+      }
+      return;
+    }
+
+    if (event.type === 'run_item_stream_event') {
+      const name = event.name;
+      const item = event.item;
+
+      if (name === 'message_output_created') {
+        if (item && item.content) {
+          const text = item.content
+            .filter(c => c.type === 'output_text')
+            .map(c => c.text)
+            .join('\n');
+          if (text) {
+            this._emit({ type: 'assistant_text', text, providerId: 'openai' });
+            this._persistAssistantTextToRecChat(text);
+          }
+        }
+        return;
+      }
+
+      if (name === 'tool_called') {
+        if (item && item.rawItem) {
+          const raw = item.rawItem;
+          let toolInput = {};
+          try { toolInput = raw.arguments ? JSON.parse(raw.arguments) : {}; } catch {}
+          this._emit({
+            type: 'tool_use',
+            toolName: raw.name,
+            toolInput,
+            toolCallId: raw.call_id || raw.id,
+            providerId: 'openai',
+          });
+        }
+        return;
+      }
+
+      if (name === 'tool_output') {
+        if (item && item.rawItem) {
+          const raw = item.rawItem;
+          this._emit({
+            type: 'tool_result',
+            toolCallId: raw.call_id || raw.id,
+            output: raw.output || '',
+            providerId: 'openai',
+          });
+          this._broadcastToolProgress();
+        }
+        return;
+      }
+
+      if (name === 'tool_approval_requested') {
+        if (item && item.rawItem) {
+          const raw = item.rawItem;
+          let toolInput = {};
+          try { toolInput = raw.arguments ? JSON.parse(raw.arguments) : {}; } catch {}
+          this._emit({
+            type: 'permission_request',
+            toolName: raw.name,
+            toolInput,
+            toolCallId: raw.call_id || raw.id,
+            providerId: 'openai',
+          });
+        }
+        return;
+      }
+
+      if (name === 'reasoning_item_created') {
+        if (item && item.rawItem) {
+          const raw = item.rawItem;
+          const text = raw.summary ? raw.summary.map(s => s.text).join('\n') : '';
+          if (text) {
+            this._emit({ type: 'reasoning_text', text, providerId: 'openai' });
+          }
+        }
+        return;
+      }
+      return;
+    }
+
+    if (event.type === 'agent_updated_stream_event') {
+      return;
+    }
+  }
+
+  async _handleOCInterruptions(interruptions, state) {
+    for (const interruption of interruptions) {
+      const hash = 'oc-' + (interruption.rawItem?.call_id || interruption.rawItem?.id || crypto.randomBytes(4).toString('hex'));
+      const toolName = interruption.name;
+      let toolInput = {};
+      try { toolInput = interruption.arguments ? JSON.parse(interruption.arguments) : {}; } catch {}
+
+      const menuPromise = new Promise((resolve) => {
+        this._pendingOCApprovals.set(hash, {
+          interruption,
+          state,
+          resolve,
+          toolName,
+          toolInput,
+        });
+      });
+
+      this._emit({
+        type: 'permission_request',
+        toolName,
+        toolInput,
+        toolCallId: interruption.rawItem?.call_id || interruption.rawItem?.id,
+        hash,
+        providerId: 'openai',
+      });
+
+      this.emit('menu', {
+        n: 1,
+        options: [
+          { label: 'Allow once', value: 1 },
+          { label: 'Allow always', value: 2 },
+          { label: 'Deny', value: 3 },
+        ],
+        hash,
+        toolName,
+      });
+
+      const decision = await menuPromise;
+
+      if (decision === 'approve') {
+        state.approve(interruption);
+      } else if (decision === 'approve_always') {
+        state.approve(interruption, { alwaysApprove: true });
+      } else {
+        state.reject(interruption, { message: 'Denied by user' });
+      }
+    }
+  }
+
   // fr-45: validate sdkOpts keys against the SDK_OPTIONS_ALLOWLIST.
   // Catches silent-typo bugs like bug-14 round 2 (`abortSignal` vs
   // `abortController`) — the SDK silently drops unknown keys, so
@@ -751,6 +1052,12 @@ class AgentSession extends EventEmitter {
     if (this._msgQueue) {
       try { this._msgQueue.close(); } catch {}
     }
+    if (this._pendingOCApprovals.size > 0) {
+      for (const [hash, approval] of this._pendingOCApprovals) {
+        approval.resolve('deny');
+        this._pendingOCApprovals.delete(hash);
+      }
+    }
     // Recovery for stuck-running runQueue entries (e.g. across container restarts):
     try {
       if (!this._activeRunItem) {
@@ -792,6 +1099,10 @@ class AgentSession extends EventEmitter {
             && sessionsMod.getSessionRecord(this.sessionId);
           if (rec) {
             rec.sdkSessionId = this.sdkSessionId;
+            sessionsMod.saveStore();
+          }
+          if (this.openaiResponseId) {
+            rec.openaiResponseId = this.openaiResponseId;
             sessionsMod.saveStore();
           }
         } catch (err) {
@@ -1402,6 +1713,23 @@ class AgentSession extends EventEmitter {
   // chat pane (or via /decide N). Resolves the corresponding canUseTool
   // promise with the SDK-shaped response.
   resolveMenuPick(hash, n) {
+    const ocApproval = this._pendingOCApprovals.get(hash);
+    if (ocApproval) {
+      this._pendingOCApprovals.delete(hash);
+      this.pendingMenus.delete(hash);
+      if (n === 3) {
+        ocApproval.resolve('deny');
+        this._emit({ type: 'permission_resolved', hash, decision: 'deny', providerId: 'openai' });
+      } else if (n === 2) {
+        ocApproval.resolve('approve_always');
+        this._emit({ type: 'permission_resolved', hash, decision: 'approve_always', providerId: 'openai' });
+      } else {
+        ocApproval.resolve('approve');
+        this._emit({ type: 'permission_resolved', hash, decision: 'approve', providerId: 'openai' });
+      }
+      return true;
+    }
+
     const pending = this._pendingPermissions.get(hash);
     if (!pending) {
       console.log(`[agent-menu] ${this.sessionId} pick for unknown hash ${hash.slice(-12)} — ignoring`);
@@ -1939,6 +2267,12 @@ class AgentSession extends EventEmitter {
     }
     if (this._msgQueue) {
       try { this._msgQueue.close(); } catch {}
+    }
+    if (this._pendingOCApprovals.size > 0) {
+      for (const [hash, approval] of this._pendingOCApprovals) {
+        approval.resolve('deny');
+        this._pendingOCApprovals.delete(hash);
+      }
     }
     this.emit('exit', 0);
   }
