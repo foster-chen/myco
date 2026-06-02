@@ -111,7 +111,7 @@ function resolveSdkOptionKey(npm, providerId) {
 }
 
 // src/llm.ts
-import { streamText, generateText as aiGenerateText } from "ai";
+import { streamText, generateText as aiGenerateText, stepCountIs } from "ai";
 import { randomUUID } from "crypto";
 
 // src/transform.ts
@@ -470,6 +470,7 @@ function createAgent(input) {
     baseURL: input.baseURL,
     isReasoning: input.isReasoning ?? false
   });
+  const maxSteps = input.maxSteps ?? 200;
   const pendingMessages = [...input.messages ?? []];
   let interruptSignal;
   let killed = false;
@@ -517,6 +518,7 @@ function createAgent(input) {
       activeTools: toolNames,
       providerOptions: mergedProviderOptions,
       abortSignal: interruptSignal.signal,
+      stopWhen: stepCountIs(maxSteps),
       onError(error) {
         console.error("[agent-sdk] stream error:", error);
       }

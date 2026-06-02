@@ -834,6 +834,7 @@ test_best_practices_template() {
   node_test_result test/migrate-plan-ids.test.js "test/migrate-plan-ids.test.js (4 cases)"
   node_test_result test/chat-routing.test.js "test/chat-routing.test.js (7 cases)"
   node_test_result test/oc-tools.test.js "test/oc-tools.test.js (9 cases — registration + 7 tool execute + permission gating)"
+  node_test_result test/oc-max-steps-and-tool-result.test.js "test/oc-max-steps-and-tool-result.test.js (7 cases — maxSteps + tool_result normalization)"
 }
 
 test_conv_view_css() {

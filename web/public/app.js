@@ -6385,9 +6385,10 @@ function _chromeEventLine(ev, ts) {
     kind = 'rate-limit';
     summary = '';
   } else if (ev.type === 'tool_result') {
-    const bytes = (ev.content || '').length;
+    const resultContent = ev.content || ev.result || '';
+    const bytes = resultContent.length;
     kind = ev.isError ? '⚠ result' : '✓ result';
-    summary = bytes + ' bytes · for=' + (ev.tool_use_id || '').slice(-8);
+    summary = bytes + ' bytes · for=' + (ev.tool_use_id || ev.id || '').slice(-8);
   } else if (ev.type === 'turn_result') {
     const cost = ev.totalCostUsd != null ? '$' + ev.totalCostUsd.toFixed(4) : '$?';
     const u = ev.usage || {};
@@ -6553,7 +6554,7 @@ function _chromeEventDetails(ev) {
     return `<div class="agent-json">${_renderJsonTree(input)}</div>`;
   }
   if (ev.type === 'tool_result') {
-    const content = String(ev.content || '');
+    const content = String(ev.content || ev.result || '');
     if (!content) return '<span class="agent-mute">(empty result)</span>';
     // If the content parses as JSON, render as a collapsible tree.
     // Common for Grep / Glob / sub-agent / Read-of-json-file results.
@@ -6929,7 +6930,7 @@ function _appendToChromeBatch(card, ev, ts) {
 // the running total).
 function _bumpToolResultAggregator(card, ev) {
   if (!ev || ev.type !== 'tool_result') return;
-  const evBytes = (ev.content || '').length;
+  const evBytes = (ev.content || ev.result || '').length;
   const total = parseInt(card.dataset.toolResultBytes || '0', 10) + evBytes;
   const count = parseInt(card.dataset.toolResultCount || '0', 10) + 1;
   card.dataset.toolResultBytes = String(total);

@@ -754,6 +754,7 @@ class AgentSession extends EventEmitter {
       return;
     }
 
+    const OC_MAX_STEPS = parseInt(process.env.MYCO_OC_MAX_STEPS || '200', 10);
     const MAX_ATTEMPTS = 3;
     const BACKOFF_MS = [1000, 4000, 16000];
 
@@ -772,6 +773,7 @@ class AgentSession extends EventEmitter {
           systemPrompt: this._readSystemPrompt(),
           canUseTool: this._canUseToolOC.bind(this),
           messages: messagesToSend,
+          maxSteps: OC_MAX_STEPS,
         });
         this._ocHandle = handle;
       } catch (err) {
@@ -854,7 +856,7 @@ class AgentSession extends EventEmitter {
         this._flushOCReasoningBuffer();
         const toolInfoOC = this.openToolCalls.get(event.id);
         this.openToolCalls.delete(event.id);
-        this._emit({ type: 'tool_result', id: event.id, name: event.name, result: event.result });
+        this._emit({ type: 'tool_result', tool_use_id: event.id, content: String(event.result || ''), isError: !!event.is_error });
         if (toolInfoOC && !event.is_error) {
           if (FILE_WRITING_TOOL_NAMES.includes(toolInfoOC.name)) {
             this.emit('state-update', { kind: 'file-tree-change', path: (toolInfoOC.input && toolInfoOC.input.file_path) || null });
