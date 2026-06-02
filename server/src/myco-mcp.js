@@ -149,4 +149,4 @@ function createMycoMcpServer(sessionId) {
   });
 }
 
-module.exports = { createMycoMcpServer, MYCO_MCP_TOOL_PREFIX };
+module.exports = { createMycoMcpServer, MYCO_MCP_TOOL_PREFIX, _appendPlanItems };
