@@ -1972,6 +1972,33 @@ test_openai_sdk_static() {
   grep -q "item.content.filter" server/src/agent-session.js \
     && fail "agent-session.js: item.content.filter() used — RunMessageOutputItem.content is a string getter, not an array" \
     || pass "agent-session.js: item.content.filter() not used (correct — content is string getter)"
+
+  echo "  Checking OC menu has kind: permission..."
+  grep -q "kind: 'permission'" server/src/agent-session.js \
+    && pass "agent-session.js: OC menu has kind: 'permission'" \
+    || fail "agent-session.js: OC menu missing kind: 'permission' (needed for menu pipeline)"
+
+  echo "  Checking OC menu options use n key..."
+  grep -q "{ n: 1, label: 'Allow once'" server/src/agent-session.js \
+    && pass "agent-session.js: OC menu options use { n, label } format" \
+    || fail "agent-session.js: OC menu options missing { n } key (client expects o.n, not o.value)"
+
+  echo "  Checking OC menu has target field..."
+  grep -q "target: { tool:" server/src/agent-session.js \
+    && pass "agent-session.js: OC menu has target field" \
+    || fail "agent-session.js: OC menu missing target field (needed for permissions.decide)"
+
+  echo "  Checking _adaptOpenAIEvent does not emit permission_request for tool_approval_requested..."
+  grep -q "name === 'tool_approval_requested'" server/src/agent-session.js \
+    && grep -A3 "tool_approval_requested" server/src/agent-session.js | grep -q "permission_request" \
+    && fail "agent-session.js: _adaptOpenAIEvent emits permission_request for tool_approval_requested (duplicate — handled by _handleOCInterruptions)" \
+    || pass "agent-session.js: _adaptOpenAIEvent does not emit permission_request for tool_approval_requested"
+
+  echo "  Checking _matchingInputFor handles OC tool names..."
+  grep -q "bash'" server/src/agent-session.js | grep -q "_matchingInputFor" && grep "_matchingInputFor" server/src/agent-session.js | grep -q "bash'" \
+    || grep "_matchingInputFor" server/src/agent-session.js | grep -q "'bash'" \
+    && pass "agent-session.js: _matchingInputFor handles 'bash' (OC tool name)" \
+    || fail "agent-session.js: _matchingInputFor missing OC tool name mappings"
 }
 
 run_static_checks() {
@@ -2986,6 +3013,7 @@ test_chat_window() {
   node_test_result test/agent-config.test.js "test/agent-config.test.js (11 cases)"
   node_test_result test/oc-tools.test.js "test/oc-tools.test.js (8 cases)"
   node_test_result test/adapt-openai-event.test.js "test/adapt-openai-event.test.js (3 cases — _adaptOpenAIEvent content-string regression)"
+  node_test_result test/oc-menu-permission.test.js "test/oc-menu-permission.test.js (5 cases — OC menu/toolUse/toolResult shape)"
   # bug-46: /artifact/vote returned 403 for any authenticated user
   # who wasn't the session owner / admin / explicit viewer (fr-87
   # private-by-default gate). But the voters[] schema +

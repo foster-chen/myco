@@ -115,14 +115,14 @@ class AsyncMessageQueue {
 // Truncate Claude's tool inputs to a chat-card-sized blurb.
 function _summariseToolInput(name, input) {
   try {
-    if (name === 'Bash') return String((input && input.command) || '').slice(0, 200);
-    if (name === 'Read' || name === 'Edit' || name === 'Write') return String((input && input.file_path) || '').slice(0, 200);
-    if (name === 'Glob' || name === 'Grep') {
+    if (name === 'Bash' || name === 'bash') return String((input && input.command) || '').slice(0, 200);
+    if (name === 'Read' || name === 'Edit' || name === 'Write' || name === 'read_file' || name === 'edit_file' || name === 'write_file') return String((input && (input.file_path || input.filePath)) || '').slice(0, 200);
+    if (name === 'Glob' || name === 'Grep' || name === 'glob' || name === 'grep') {
       const q = (input && (input.pattern || input.query)) || '';
       const p = (input && input.path) ? ` in ${input.path}` : '';
       return (q + p).slice(0, 200);
     }
-    if (name === 'WebFetch') return String((input && input.url) || '').slice(0, 200);
+    if (name === 'WebFetch' || name === 'web_fetch') return String((input && input.url) || '').slice(0, 200);
     return JSON.stringify(input || {}).slice(0, 200);
   } catch { return ''; }
 }
@@ -133,10 +133,10 @@ function _summariseToolInput(name, input) {
 // structured input, so we extract the relevant field directly.
 function _matchingInputFor(toolName, toolInput) {
   if (!toolInput || typeof toolInput !== 'object') return '';
-  if (toolName === 'Bash') return String(toolInput.command || '');
-  if (['Read', 'Edit', 'Write', 'MultiEdit'].includes(toolName)) return String(toolInput.file_path || '');
-  if (['Glob', 'Grep'].includes(toolName)) return String(toolInput.pattern || toolInput.query || '');
-  if (toolName === 'WebFetch') return String(toolInput.url || '');
+  if (toolName === 'Bash' || toolName === 'bash') return String(toolInput.command || '');
+  if (['Read', 'Edit', 'Write', 'MultiEdit', 'read_file', 'edit_file', 'write_file'].includes(toolName)) return String(toolInput.file_path || toolInput.filePath || '');
+  if (['Glob', 'Grep', 'glob', 'grep'].includes(toolName)) return String(toolInput.pattern || toolInput.query || '');
+  if (toolName === 'WebFetch' || toolName === 'web_fetch') return String(toolInput.url || '');
   return '';
 }
 
@@ -848,6 +848,9 @@ class AgentSession extends EventEmitter {
           try { toolInput = raw.arguments ? JSON.parse(raw.arguments) : {}; } catch {}
           this._emit({
             type: 'tool_use',
+            name: raw.name,
+            input: toolInput,
+            id: raw.call_id || raw.id,
             toolName: raw.name,
             toolInput,
             toolCallId: raw.call_id || raw.id,
@@ -860,8 +863,14 @@ class AgentSession extends EventEmitter {
       if (name === 'tool_output') {
         if (item && item.rawItem) {
           const raw = item.rawItem;
+          const content = typeof raw.output === 'string' ? raw.output
+            : (raw.output && typeof raw.output === 'object' && raw.output.text) ? raw.output.text
+            : '';
           this._emit({
             type: 'tool_result',
+            tool_use_id: raw.call_id || raw.id,
+            content,
+            isError: false,
             toolCallId: raw.call_id || raw.id,
             output: raw.output || '',
             providerId: 'openai',
@@ -872,18 +881,6 @@ class AgentSession extends EventEmitter {
       }
 
       if (name === 'tool_approval_requested') {
-        if (item && item.rawItem) {
-          const raw = item.rawItem;
-          let toolInput = {};
-          try { toolInput = raw.arguments ? JSON.parse(raw.arguments) : {}; } catch {}
-          this._emit({
-            type: 'permission_request',
-            toolName: raw.name,
-            toolInput,
-            toolCallId: raw.call_id || raw.id,
-            providerId: 'openai',
-          });
-        }
         return;
       }
 
@@ -931,16 +928,21 @@ class AgentSession extends EventEmitter {
         providerId: 'openai',
       });
 
-      this.emit('menu', {
-        n: 1,
+      const summary = _summariseToolInput(toolName, toolInput);
+      const menu = {
+        kind: 'permission',
+        question: `Allow ${toolName}${summary ? ': ' + summary : ''}?`,
         options: [
-          { label: 'Allow once', value: 1 },
-          { label: 'Allow always', value: 2 },
-          { label: 'Deny', value: 3 },
+          { n: 1, label: 'Allow once', description: 'Run this single call.' },
+          { n: 2, label: 'Allow always', description: 'Auto-approve matching calls in this project.' },
+          { n: 3, label: 'Deny',         description: 'Block this call; Claude will choose a different approach.' },
         ],
         hash,
-        toolName,
-      });
+        target: { tool: toolName, input: _matchingInputFor(toolName, toolInput) },
+      };
+
+      this.pendingMenus.set(hash, menu);
+      this.emit('menu', menu);
 
       const decision = await menuPromise;
 
