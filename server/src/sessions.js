@@ -1226,6 +1226,7 @@ async function ensureLiveSession(sessionId) {
   const session = spawnAgent(sessionId, {
     cwd: liveCwd,
     resumeSdkSessionId: rec.sdkSessionId || null,
+    resumeOpenaiResponseId: rec.openaiResponseId || null,
     // fr-26: re-seed git identity on respawn.
     user: rec.user || null,
   });
