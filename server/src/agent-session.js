@@ -240,7 +240,6 @@ class AgentSession extends EventEmitter {
     this._pendingPermissions = new Map();
     this._pendingOCApprovals = new Map();
     this._ocRunState = null;
-    this.openaiResponseId = opts.resumeOpenaiResponseId || null;
 
     // Always emit a ready event so the browser's event-log pane has
     // something visible from the moment the WS attaches — otherwise a
@@ -651,8 +650,7 @@ class AgentSession extends EventEmitter {
     try {
       const { apiKey, model, baseUrl } = agentConfig.resolve();
 
-      const { Agent, run, setDefaultOpenAIClient, OpenAIProvider, setDefaultModelProvider } = require('@openai/agents');
-      const OpenAI = require('openai');
+      const { Agent, run, OpenAIProvider, setDefaultModelProvider } = require('@openai/agents');
       const { createOpenAITools } = require('./openai-tools/index');
 
       if (baseUrl && baseUrl !== 'https://api.openai.com/v1') {
@@ -697,10 +695,6 @@ class AgentSession extends EventEmitter {
             maxTurns: null,
           };
 
-          if (this.openaiResponseId && !this._ocRunState) {
-            runOpts.previousResponseId = this.openaiResponseId;
-          }
-
           this._emit({ type: 'iteration_start', attempt });
 
           let result = await run(agent, input, runOpts);
@@ -716,9 +710,6 @@ class AgentSession extends EventEmitter {
             this._iterating = false;
             return this._ensureIterationOpenAI();
           }
-
-          this.openaiResponseId = result.lastResponseId;
-          this._persistOpenaiResponseId();
 
           this._emit({
             type: 'turn_result',
@@ -747,14 +738,6 @@ class AgentSession extends EventEmitter {
             return;
           }
 
-          const isResumeFailure = err.status === 404 && this.openaiResponseId;
-          if (isResumeFailure) {
-            this.openaiResponseId = null;
-            this._emit({ type: 'resume_failed', reason: 'previous_response_id expired or invalid' });
-            attempt--;
-            continue;
-          }
-
           if (this._isRecoverableOC(err)) {
             await this._emitRetryAndWaitOC(err, attempt, BACKOFF_MS);
             continue;
@@ -774,20 +757,6 @@ class AgentSession extends EventEmitter {
 
     this._iterating = false;
     this.emit('idle');
-  }
-
-  _persistOpenaiResponseId() {
-    if (!this.openaiResponseId) return;
-    try {
-      const sessionsMod = require('./sessions');
-      const rec = sessionsMod.getSessionRecord && sessionsMod.getSessionRecord(this.sessionId);
-      if (rec) {
-        rec.openaiResponseId = this.openaiResponseId;
-        sessionsMod.saveStore();
-      }
-    } catch (err) {
-      console.error(`[agent-session] failed to persist openaiResponseId: ${err.message}`);
-    }
   }
 
   _buildInitialPrompt() {
@@ -817,15 +786,6 @@ class AgentSession extends EventEmitter {
   }
 
   _adaptOpenAIEvent(event) {
-    if (event.type === 'raw_model_stream_event') {
-      const data = event.data;
-      if (data && data.type === 'response.output_text.delta' && data.delta) {
-        this._emit({ type: 'assistant_text', text: data.delta, providerId: 'openai' });
-        this._persistAssistantTextToRecChat(data.delta);
-      }
-      return;
-    }
-
     if (event.type === 'run_item_stream_event') {
       const name = event.name;
       const item = event.item;
@@ -1118,10 +1078,6 @@ class AgentSession extends EventEmitter {
             && sessionsMod.getSessionRecord(this.sessionId);
           if (rec) {
             rec.sdkSessionId = this.sdkSessionId;
-            sessionsMod.saveStore();
-          }
-          if (this.openaiResponseId) {
-            rec.openaiResponseId = this.openaiResponseId;
             sessionsMod.saveStore();
           }
         } catch (err) {
