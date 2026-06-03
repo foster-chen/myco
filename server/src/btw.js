@@ -110,18 +110,15 @@ async function runClaudeP(cwd, promptBody) {
 }
 
 async function runOpenAIP(cwd, promptBody, model, apiKey, baseUrl) {
-  const { Agent, run, setDefaultOpenAIClient, OpenAIProvider, setDefaultModelProvider } = require('@openai/agents');
-  const OpenAI = require('openai');
+  const { Agent, run, OpenAIProvider, setDefaultModelProvider } = require('@openai/agents');
 
   const abortController = new AbortController();
   const timeout = setTimeout(() => { try { abortController.abort(); } catch {} }, TIMEOUT_MS);
 
   try {
-    if (baseUrl && baseUrl !== 'https://api.openai.com/v1') {
-      setDefaultModelProvider(new OpenAIProvider({ baseURL: baseUrl, apiKey, useResponses: false }));
-    } else {
-      setDefaultOpenAIClient(new OpenAI({ apiKey }));
-    }
+    const providerOpts = { apiKey, useResponses: false };
+    if (baseUrl) providerOpts.baseURL = baseUrl;
+    setDefaultModelProvider(new OpenAIProvider(providerOpts));
 
     const agent = new Agent({
       name: 'myco-btw',
