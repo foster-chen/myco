@@ -240,6 +240,8 @@ class AgentSession extends EventEmitter {
     this._pendingPermissions = new Map();
     this._pendingOCApprovals = new Map();
     this._ocRunState = null;
+    this._openaiHistoryItems = opts.resumeOpenaiHistory || null;
+    this._openaiSession = null;
 
     // Always emit a ready event so the browser's event-log pane has
     // something visible from the moment the WS attaches — otherwise a
@@ -653,16 +655,19 @@ class AgentSession extends EventEmitter {
       const { Agent, run, OpenAIProvider, setDefaultModelProvider } = require('@openai/agents');
       const { createOpenAITools } = require('./openai-tools/index');
 
-      if (baseUrl && baseUrl !== 'https://api.openai.com/v1') {
-        const provider = new OpenAIProvider({
-          baseURL: baseUrl,
-          apiKey,
-          useResponses: false,
-        });
-        setDefaultModelProvider(provider);
-      } else {
-        const client = new OpenAI({ apiKey });
-        setDefaultOpenAIClient(client);
+      const providerOpts = { apiKey, useResponses: false };
+      if (baseUrl) providerOpts.baseURL = baseUrl;
+      setDefaultModelProvider(new OpenAIProvider(providerOpts));
+
+      if (!this._openaiSession) {
+        const { MemorySession } = require('@openai/agents');
+        this._openaiSession = new MemorySession();
+        if (this._openaiHistoryItems && this._openaiHistoryItems.length > 0) {
+          const chatHistory = require('./chat-history-openai');
+          const maxTokens = parseInt(process.env.MYCO_CONTEXT_MAX_TOKENS || '32000', 10);
+          const trimmed = chatHistory.trimHistoryToBudget(this._openaiHistoryItems, maxTokens);
+          this._openaiSession.setItems(trimmed);
+        }
       }
 
       const MAX_ATTEMPTS = 3;
@@ -693,6 +698,7 @@ class AgentSession extends EventEmitter {
             stream: true,
             signal: this._abortController.signal,
             maxTurns: null,
+            session: this._openaiSession,
           };
 
           this._emit({ type: 'iteration_start', attempt });
@@ -703,6 +709,7 @@ class AgentSession extends EventEmitter {
             this._adaptOpenAIEvent(event);
           }
           await result.completed;
+          this._persistOpenaiHistory();
 
           if (result.interruptions && result.interruptions.length > 0) {
             this._ocRunState = result.state;
@@ -736,6 +743,18 @@ class AgentSession extends EventEmitter {
             this._iterating = false;
             this.emit('idle');
             return;
+          }
+
+          if (err.status === 400 && this._openaiSession) {
+            const chatHistory = require('./chat-history-openai');
+            const maxTokens = parseInt(process.env.MYCO_CONTEXT_MAX_TOKENS || '32000', 10);
+            const halfBudget = Math.floor(maxTokens / 2);
+            const items = this._openaiSession.getItems();
+            const trimmed = chatHistory.trimHistoryToBudget(items, halfBudget);
+            this._openaiSession.setItems(trimmed);
+            this._emit({ type: 'context_overflow', reason: err.message, providerId: 'openai' });
+            attempt--;
+            continue;
           }
 
           if (this._isRecoverableOC(err)) {
@@ -2032,7 +2051,7 @@ class AgentSession extends EventEmitter {
     console.log(`[persist-chat] ${this.sessionId} mirrored assistant_text (${trimmed.length} chars) to rec.chat fromAgent:true${msg.meta.kind === 'clarify-reply' ? ' (clarify-reply)' : ''}`);
   }
 
-  // td-33 (B — stage-aware critic): scan claude's assistant_text for
+// td-33 (B — stage-aware critic): scan claude's assistant_text for
   // stage-boundary sentinels emitted per the critic.md +
   // best-practices-template directive. Sentinel grammar (case-
   // insensitive, whitespace-tolerant):
@@ -2100,6 +2119,22 @@ class AgentSession extends EventEmitter {
       // in the same text block. The next turn can fire a different
       // stage; this turn is one-and-done.
       break;
+    }
+  }
+
+  _persistOpenaiHistory() {
+    try {
+      const sessionsMod = require('./sessions');
+      const rec = sessionsMod.getSessionRecord && sessionsMod.getSessionRecord(this.sessionId);
+      if (rec && this._openaiSession) {
+        const items = this._openaiSession.getItems();
+        const chatHistory = require('./chat-history-openai');
+        const maxTokens = parseInt(process.env.MYCO_CONTEXT_MAX_TOKENS || '32000', 10);
+        rec.openaiHistory = chatHistory.trimHistoryToBudget(items, maxTokens);
+        sessionsMod.saveStore();
+      }
+    } catch (err) {
+      console.error(`[agent-session] failed to persist openaiHistory: ${err.message}`);
     }
   }
 
