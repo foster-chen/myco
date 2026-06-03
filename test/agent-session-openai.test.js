@@ -10,10 +10,10 @@ if (provider !== 'openai' || !apiKey) {
   process.exit(0);
 }
 
-const { Agent, run, setDefaultOpenAIClient } = require('@openai/agents');
-const OpenAI = require('openai');
+const { Agent, run, OpenAIProvider, setDefaultModelProvider } = require('@openai/agents');
 const { createOpenAITools } = require('../server/src/openai-tools/index');
 const agentConfig = require('../server/src/agent-config');
+const chatHistory = require('../server/src/chat-history-openai');
 
 const cfg = agentConfig.resolve();
 assert.strictEqual(cfg.providerId, 'openai');
@@ -26,7 +26,7 @@ assert.ok(tools.length >= 7);
 console.log('PASS: createOpenAITools produces tool array');
 
 (async () => {
-  setDefaultOpenAIClient(new OpenAI({ apiKey }));
+  setDefaultModelProvider(new OpenAIProvider({ apiKey, useResponses: false }));
   const agent = new Agent({
     name: 'test-smoke',
     model: cfg.model,
@@ -38,16 +38,14 @@ console.log('PASS: createOpenAITools produces tool array');
   assert.ok(result.finalOutput);
   console.log('PASS: basic OpenAI agent run produces output');
   console.log('Output:', result.finalOutput);
-  console.log('Last response ID:', result.lastResponseId);
 
-  if (result.lastResponseId) {
-    const result2 = await run(agent, 'What did I just ask?', {
-      maxTurns: 1,
-      previousResponseId: result.lastResponseId,
-    });
-    assert.ok(result2.finalOutput);
-    console.log('PASS: conversation continuation via previousResponseId');
-  }
+  assert.ok(result.history, 'result.history is present');
+  assert.ok(Array.isArray(result.history), 'result.history is an array');
+  console.log('PASS: result.history contains conversation items');
+
+  const trimmed = chatHistory.trimHistoryToBudget(result.history, 32000);
+  assert.ok(Array.isArray(trimmed), 'trimHistoryToBudget returns array');
+  console.log('PASS: chat-history-openai.trimHistoryToBudget works on real history');
 })().catch(e => {
   console.error('FAIL: OpenAI agent run error:', e.message);
   process.exit(1);
