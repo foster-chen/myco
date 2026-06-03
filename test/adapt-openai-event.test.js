@@ -50,14 +50,7 @@ class MockAgentSession {
         return;
       }
     }
-    if (event.type === 'raw_model_stream_event') {
-      const data = event.data;
-      if (data && data.type === 'response.output_text.delta' && data.delta) {
-        this._emit({ type: 'assistant_text', text: data.delta, providerId: 'openai' });
-        this._persistAssistantTextToRecChat(data.delta);
-      }
-      return;
-    }
+    
   }
 }
 
