@@ -1960,10 +1960,60 @@ test_openai_sdk_static() {
     && pass "agent-config.js: OPENAI_API_KEY env var referenced" \
     || fail "agent-config.js: OPENAI_API_KEY env var missing"
 
-  echo "  Checking _persistOpenaiResponseId method..."
-  grep -q "_persistOpenaiResponseId" server/src/agent-session.js \
-    && pass "agent-session.js: _persistOpenaiResponseId method present" \
-    || fail "agent-session.js: _persistOpenaiResponseId method missing"
+  echo "  Checking _openaiSession field in AgentSession..."
+  grep -q "this._openaiSession" server/src/agent-session.js \
+    && pass "agent-session.js: _openaiSession field present" \
+    || fail "agent-session.js: _openaiSession field missing"
+
+  echo "  Checking _persistOpenaiHistory method..."
+  grep -q "_persistOpenaiHistory" server/src/agent-session.js \
+    && pass "agent-session.js: _persistOpenaiHistory method present" \
+    || fail "agent-session.js: _persistOpenaiHistory method missing"
+
+  echo "  Checking chat-history-openai.js exports..."
+  grep -q "module.exports" server/src/chat-history-openai.js \
+    && pass "chat-history-openai.js: module.exports present" \
+    || fail "chat-history-openai.js: module.exports missing"
+
+  echo "  Checking no openaiResponseId in agent-session.js..."
+  grep -q "openaiResponseId" server/src/agent-session.js \
+    && fail "agent-session.js: openaiResponseId still present (should be removed)" \
+    || pass "agent-session.js: openaiResponseId removed"
+
+  echo "  Checking no setDefaultOpenAIClient in agent-session.js..."
+  grep -q "setDefaultOpenAIClient" server/src/agent-session.js \
+    && fail "agent-session.js: setDefaultOpenAIClient still present (should be removed)" \
+    || pass "agent-session.js: setDefaultOpenAIClient removed"
+
+  echo "  Checking no previousResponseId in agent-session.js..."
+  grep -q "previousResponseId" server/src/agent-session.js \
+    && fail "agent-session.js: previousResponseId still present (should be removed)" \
+    || pass "agent-session.js: previousResponseId removed"
+
+  echo "  Checking openaiHistory in sessions.js..."
+  grep -q "openaiHistory" server/src/sessions.js \
+    && pass "sessions.js: openaiHistory referenced" \
+    || fail "sessions.js: openaiHistory not referenced"
+
+  echo "  Checking no setDefaultOpenAIClient in btw.js..."
+  grep -q "setDefaultOpenAIClient" server/src/btw.js \
+    && fail "btw.js: setDefaultOpenAIClient still present (should be removed)" \
+    || pass "btw.js: setDefaultOpenAIClient removed"
+
+  echo "  Checking no setDefaultOpenAIClient in claude-cli.js..."
+  grep -q "setDefaultOpenAIClient" server/src/claude-cli.js \
+    && fail "claude-cli.js: setDefaultOpenAIClient still present (should be removed)" \
+    || pass "claude-cli.js: setDefaultOpenAIClient removed"
+
+  echo "  Checking MYCO_CONTEXT_MAX_TOKENS in ENV_KEYS..."
+  grep -q "MYCO_CONTEXT_MAX_TOKENS" server/src/index.js \
+    && pass "index.js: MYCO_CONTEXT_MAX_TOKENS in ENV_KEYS" \
+    || fail "index.js: MYCO_CONTEXT_MAX_TOKENS missing from ENV_KEYS"
+
+  echo "  Checking no temp.py (Responses API test with hardcoded key)..."
+  test -f temp.py \
+    && fail "temp.py still exists (should be deleted)" \
+    || pass "temp.py deleted"
 
   echo "  Checking _adaptOpenAIEvent does not call .filter on item.content..."
   grep -q "item.content.filter" server/src/agent-session.js \
