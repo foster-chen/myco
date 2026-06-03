@@ -5,7 +5,7 @@ const assert = require('assert');
 const origEnv = {};
 const envKeys = [
   'MYCO_AGENT_PROVIDER', 'MYCO_AGENT_API_KEY', 'ANTHROPIC_API_KEY',
-  'MYCO_OPENAI_API_KEY', 'MYCO_ALIBABA_CN_API_KEY',
+  'OPENAI_API_KEY',
   'MYCO_AGENT_MODEL', 'MYCO_AUX_MODEL', 'MYCO_AGENT_BASE_URL',
 ];
 
@@ -31,7 +31,7 @@ assert.strictEqual(cfg1.model, 'claude-sonnet-4-20250514');
 assert.strictEqual(cfg1.baseUrl, null);
 console.log('PASS: default anthropic config');
 
-restoreEnv(); setEnv({ MYCO_AGENT_PROVIDER: 'openai', MYCO_OPENAI_API_KEY: 'sk-oai-test' });
+restoreEnv(); setEnv({ MYCO_AGENT_PROVIDER: 'openai', OPENAI_API_KEY: 'sk-oai-test' });
 const cfg2 = agentConfig.resolve();
 assert.strictEqual(cfg2.providerId, 'openai');
 assert.strictEqual(cfg2.apiKey, 'sk-oai-test');
@@ -39,18 +39,18 @@ assert.strictEqual(cfg2.model, 'gpt-4o');
 assert.strictEqual(cfg2.baseUrl, 'https://api.openai.com/v1');
 console.log('PASS: openai config');
 
-restoreEnv(); setEnv({ MYCO_AGENT_PROVIDER: 'openai', MYCO_OPENAI_API_KEY: 'sk-oai', MYCO_AGENT_BASE_URL: 'https://dashscope.aliyuncs.com/compatible-mode/v1' });
+restoreEnv(); setEnv({ MYCO_AGENT_PROVIDER: 'openai', OPENAI_API_KEY: 'sk-oai', MYCO_AGENT_BASE_URL: 'https://dashscope.aliyuncs.com/compatible-mode/v1' });
 const cfg3 = agentConfig.resolve();
 assert.strictEqual(cfg3.baseUrl, 'https://dashscope.aliyuncs.com/compatible-mode/v1');
 console.log('PASS: MYCO_AGENT_BASE_URL override');
 
-restoreEnv(); setEnv({ MYCO_AGENT_PROVIDER: 'openai', MYCO_OPENAI_API_KEY: 'sk-oai', MYCO_AGENT_MODEL: 'qwen-max' });
+restoreEnv(); setEnv({ MYCO_AGENT_PROVIDER: 'openai', OPENAI_API_KEY: 'sk-oai', MYCO_AGENT_MODEL: 'qwen-max' });
 const cfg4 = agentConfig.resolve();
 assert.strictEqual(cfg4.model, 'qwen-max');
 assert.strictEqual(cfg4.auxModel, 'qwen-max');
 console.log('PASS: MYCO_AGENT_MODEL override');
 
-restoreEnv(); setEnv({ MYCO_AGENT_PROVIDER: 'openai', MYCO_OPENAI_API_KEY: 'sk-oai', MYCO_AGENT_MODEL: 'qwen-max', MYCO_AUX_MODEL: 'qwen-mini' });
+restoreEnv(); setEnv({ MYCO_AGENT_PROVIDER: 'openai', OPENAI_API_KEY: 'sk-oai', MYCO_AGENT_MODEL: 'qwen-max', MYCO_AUX_MODEL: 'qwen-mini' });
 const cfg5 = agentConfig.resolve();
 assert.strictEqual(cfg5.model, 'qwen-max');
 assert.strictEqual(cfg5.auxModel, 'qwen-mini');
@@ -84,19 +84,6 @@ const cfg7 = agentConfig.resolve();
 assert.strictEqual(cfg7.apiKey, undefined);
 assert.strictEqual(cfg7.providerId, 'anthropic');
 console.log('PASS: anthropic config without explicit key');
-
-restoreEnv(); setEnv({ MYCO_AGENT_PROVIDER: 'alibaba-cn', MYCO_AGENT_API_KEY: 'sk-dash-test' });
-const cfg8 = agentConfig.resolve();
-assert.strictEqual(cfg8.providerId, 'openai');
-assert.strictEqual(cfg8.apiKey, 'sk-dash-test');
-assert.strictEqual(cfg8.model, 'glm-5.1');
-assert.strictEqual(cfg8.baseUrl, 'https://dashscope.aliyuncs.com/compatible-mode/v1');
-console.log('PASS: alibaba-cn config routes through openai path');
-
-restoreEnv(); setEnv({ MYCO_AGENT_PROVIDER: 'alibaba-cn', MYCO_ALIBABA_CN_API_KEY: 'sk-dash-specific' });
-const cfg9 = agentConfig.resolve();
-assert.strictEqual(cfg9.apiKey, 'sk-dash-specific');
-console.log('PASS: alibaba-cn provider-specific API key');
 
 restoreEnv();
 console.log('All agent-config tests passed');

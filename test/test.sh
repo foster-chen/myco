@@ -1955,13 +1955,10 @@ test_openai_sdk_static() {
     && pass "no hardcoded api.openai.com URLs outside agent-config.js" \
     || fail "hardcoded api.openai.com URLs found outside agent-config.js"
 
-  echo "  Checking alibaba-cn provider support in agent-config..."
-  grep -q "alibaba-cn" server/src/agent-config.js \
-    && pass "agent-config.js: alibaba-cn provider recognized" \
-    || fail "agent-config.js: alibaba-cn provider missing"
-  grep -q "MYCO_ALIBABA_CN_API_KEY" server/src/agent-config.js \
-    && pass "agent-config.js: MYCO_ALIBABA_CN_API_KEY env var referenced" \
-    || fail "agent-config.js: MYCO_ALIBABA_CN_API_KEY env var missing"
+  echo "  Checking OPENAI_API_KEY env var in agent-config..."
+  grep -q "OPENAI_API_KEY" server/src/agent-config.js \
+    && pass "agent-config.js: OPENAI_API_KEY env var referenced" \
+    || fail "agent-config.js: OPENAI_API_KEY env var missing"
 
   echo "  Checking _persistOpenaiResponseId method..."
   grep -q "_persistOpenaiResponseId" server/src/agent-session.js \

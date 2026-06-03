@@ -2,7 +2,7 @@
 
 const PROVIDER_ENV_VARS = {
   anthropic: 'ANTHROPIC_API_KEY',
-  openai: 'MYCO_OPENAI_API_KEY',
+  openai: 'OPENAI_API_KEY',
 };
 
 const PROVIDER_DEFAULTS = {

@@ -2,7 +2,7 @@
 
 const assert = require('assert');
 
-const apiKey = process.env.MYCO_OPENAI_API_KEY || process.env.MYCO_AGENT_API_KEY;
+const apiKey = process.env.OPENAI_API_KEY || process.env.MYCO_AGENT_API_KEY;
 const provider = process.env.MYCO_AGENT_PROVIDER;
 
 if (provider !== 'openai' || !apiKey) {
