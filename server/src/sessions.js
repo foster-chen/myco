@@ -1219,14 +1219,32 @@ async function ensureLiveSession(sessionId) {
   // was set up before this feature shipped, or someone hand-deleted the
   // block — claude reads CLAUDE.md on every (re)spawn so the resumed
   // session picks up the fresh content.
-  if (rec.cloneState !== 'pending') {
+if (rec.cloneState !== 'pending') {
     injectBestPracticesIntoClaudeMd(liveCwd);
+  }
+  if (rec.openaiResponseId && !rec.openaiHistory) {
+    try {
+      const chatHistory = require('./chat-history-openai');
+      const eventsPath = path.join(liveCwd || '', '_myco_', 'events.jsonl');
+      if (fs.existsSync(eventsPath)) {
+        const lines = fs.readFileSync(eventsPath, 'utf8').split('\n').filter(Boolean);
+        const events = lines.map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+        const maxTokens = parseInt(process.env.MYCO_CONTEXT_MAX_TOKENS || '32000', 10);
+        const items = chatHistory.reconstructHistoryFromEvents(events);
+        rec.openaiHistory = chatHistory.trimHistoryToBudget(items, maxTokens);
+        delete rec.openaiResponseId;
+        saveStore();
+        console.log(`[ensureLive] migrated ${sessionId} from openaiResponseId to openaiHistory (${items.length} items)`);
+      }
+    } catch (migrateErr) {
+      console.error(`[ensureLive] openaiHistory migration failed for ${sessionId}: ${migrateErr.message}`);
+    }
   }
   const { spawnAgent } = require('./agent-session');
   const session = spawnAgent(sessionId, {
     cwd: liveCwd,
     resumeSdkSessionId: rec.sdkSessionId || null,
-    resumeOpenaiResponseId: rec.openaiResponseId || null,
+    resumeOpenaiHistory: rec.openaiHistory || null,
     // fr-26: re-seed git identity on respawn.
     user: rec.user || null,
   });
