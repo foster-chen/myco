@@ -72,8 +72,7 @@ async function callClaudeCli({ system, userMessage, cwd, timeoutMs = DEFAULT_TIM
 }
 
 async function callOpenAICli({ system, userMessage, cwd, timeoutMs, model, apiKey, baseUrl }) {
-  const { Agent, run, setDefaultOpenAIClient, OpenAIProvider, setDefaultModelProvider } = require('@openai/agents');
-  const OpenAI = require('openai');
+  const { Agent, run, OpenAIProvider, setDefaultModelProvider } = require('@openai/agents');
 
   const abortController = new AbortController();
   const timeout = setTimeout(() => {
@@ -82,11 +81,9 @@ async function callOpenAICli({ system, userMessage, cwd, timeoutMs, model, apiKe
   }, timeoutMs || DEFAULT_TIMEOUT_MS);
 
   try {
-    if (baseUrl && baseUrl !== 'https://api.openai.com/v1') {
-      setDefaultModelProvider(new OpenAIProvider({ baseURL: baseUrl, apiKey, useResponses: false }));
-    } else {
-      setDefaultOpenAIClient(new OpenAI({ apiKey }));
-    }
+    const providerOpts = { apiKey, useResponses: false };
+    if (baseUrl) providerOpts.baseURL = baseUrl;
+    setDefaultModelProvider(new OpenAIProvider(providerOpts));
 
     const agent = new Agent({
       name: 'myco-cli',
