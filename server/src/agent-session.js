@@ -2234,7 +2234,7 @@ class AgentSession extends EventEmitter {
     // result text against any text already streamed via assistant
     // messages this turn).
     this._currentTurnAssistantText = '';
-    this._emit({ type: 'turn_start', prompt: trimmed.slice(0, 200) });
+    this._emit({ type: 'turn_start', prompt: trimmed });
     if (this._iterating && this._msgQueue) {
       // Hot path: SDK is already iterating, just push.
       this._msgQueue.push(envelope);
