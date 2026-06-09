@@ -5,10 +5,10 @@ async function runCritique(prompt, systemInstruction = '') {
   }
 
   const model = process.env.OPENAI_CRITIC_MODEL || 'gpt-4o';
-  const baseUrl = process.env.OPENAI_CRITIC_BASE_URL || 'https://api.openai.com/v1/chat/completions';
+  const baseUrl = (process.env.OPENAI_CRITIC_BASE_URL || 'https://api.openai.com/v1').replace(/\/+$/, '');
   
   try {
-    const res = await fetch(baseUrl, {
+    const res = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
