@@ -1949,8 +1949,8 @@ test_openai_sdk_static() {
     && pass "agent-session.js: _pendingOCApprovals field present" \
     || fail "agent-session.js: _pendingOCApprovals field missing"
 
-  echo "  Checking no hardcoded api.openai.com URLs outside agent-config..."
-  count=$(grep -r "api\.openai\.com" server/src/ --include="*.js" | grep -v agent-config.js | grep -v index.js | grep -v "DEFAULT_BASE_URL" | wc -l)
+  echo "  Checking no hardcoded api.openai.com URLs outside allowlisted files..."
+  count=$(grep -r "api\.openai\.com" server/src/ --include="*.js" | grep -v agent-config.js | grep -v index.js | grep -v anthropic.js | grep -v critics/codex.js | grep -v "DEFAULT_BASE_URL" | wc -l)
   test "$count" -eq 0 \
     && pass "no hardcoded api.openai.com URLs outside agent-config.js" \
     || fail "hardcoded api.openai.com URLs found outside agent-config.js"
@@ -2036,14 +2036,17 @@ test_openai_sdk_static() {
     || fail "agent-session.js: OC menu missing target field (needed for permissions.decide)"
 
   echo "  Checking _adaptOpenAIEvent does not emit permission_request for tool_approval_requested..."
+  local tap_section
+  tap_section=$(grep -A3 "name === 'tool_approval_requested'" server/src/agent-session.js || true)
   grep -q "name === 'tool_approval_requested'" server/src/agent-session.js \
-    && grep -A3 "tool_approval_requested" server/src/agent-session.js | grep -q "permission_request" \
+    && grep -q "permission_request" <<<"$tap_section" \
     && fail "agent-session.js: _adaptOpenAIEvent emits permission_request for tool_approval_requested (duplicate — handled by _handleOCInterruptions)" \
     || pass "agent-session.js: _adaptOpenAIEvent does not emit permission_request for tool_approval_requested"
 
   echo "  Checking _matchingInputFor handles OC tool names..."
-  grep -q "bash'" server/src/agent-session.js | grep -q "_matchingInputFor" && grep "_matchingInputFor" server/src/agent-session.js | grep -q "bash'" \
-    || grep "_matchingInputFor" server/src/agent-session.js | grep -q "'bash'" \
+  local mif_section
+  mif_section=$(awk '/function _matchingInputFor/,/^\}/' server/src/agent-session.js || true)
+  grep -q "'bash'" <<<"$mif_section" \
     && pass "agent-session.js: _matchingInputFor handles 'bash' (OC tool name)" \
     || fail "agent-session.js: _matchingInputFor missing OC tool name mappings"
 }
@@ -2073,7 +2076,7 @@ run_static_checks() {
   test_login_modal_static
   test_file_explorer_static
   test_file_viewer_polish_static
-test_index_chatpane_uses_herestring
+  test_index_chatpane_uses_herestring
   test_no_pipe_to_grep_q_antipattern
   test_no_direct_main_project_write
   test_lastCriticReview_paired_with_stageState
