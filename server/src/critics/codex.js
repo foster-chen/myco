@@ -1,13 +1,14 @@
 async function runCritique(prompt, systemInstruction = '') {
   const apiKey = process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY;
   if (!apiKey) {
-    return '(OpenAI/Codex API key missing; please set OPENAI_API_KEY or CODEX_API_KEY in your environment)';
+    return '(OpenAI API key missing; please set OPENAI_API_KEY or CODEX_API_KEY in your environment)';
   }
 
   const model = process.env.OPENAI_CRITIC_MODEL || 'gpt-4o';
+  const baseUrl = process.env.OPENAI_CRITIC_BASE_URL || 'https://api.openai.com/v1/chat/completions';
   
   try {
-    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    const res = await fetch(baseUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -37,6 +38,6 @@ async function runCritique(prompt, systemInstruction = '') {
 
 module.exports = {
   id: 'codex',
-  name: 'Codex (OpenAI)',
+  name: 'OpenAI',
   runCritique
 };

@@ -579,7 +579,7 @@ t('fr-88 r9: ID-based Critic override has its own padding: 0 (not lumped with bu
 // nothing is selected, or model name when a model is selected,
 // in shrink mode, it should show icon only"
 //
-// Pre-r10 options: "⚖️ Critic: Gemini" / "⚖️ Critic: Codex" /
+// Pre-r10 options: "⚖️ Critic: Gemini" / "⚖️ Critic: OpenAI" /
 // "⚖️ Critic: Hosted" — at the desktop 11px font those render
 // ~110-120px wide closed. Mobile bug-43 already capped to 90px
 // with overflow ellipsis so users saw "⚖️ Critic:" with the
@@ -590,7 +590,7 @@ t('fr-88 r9: ID-based Critic override has its own padding: 0 (not lumped with bu
 //     placeholder for fresh sessions — disabled so it can't be
 //     re-selected after the user picks a model. Shows "⚖️ Critic"
 //     until a model is picked.
-//   · Model options keep "⚖️ Gemini" / "⚖️ Codex" / "⚖️ Hosted"
+//   · Model options keep "⚖️ Gemini" / "⚖️ OpenAI" / "⚖️ Hosted"
 //     (no "Critic:" prefix) so once a model is picked the select
 //     reads as just the model name.
 //
@@ -644,7 +644,7 @@ t('fr-88 r10: model options use short labels (no "Critic:" prefix)', () => {
   // Make sure we have at least 2 model options remaining.
   const modelOptions = options.filter(m => !/value=""/.test(m[1]));
   assert.ok(modelOptions.length >= 2,
-    `composer-critic-select must keep ≥ 2 model options after r10 (currently expecting Gemini/Codex/Hosted) — found ${modelOptions.length}.`);
+    `composer-critic-select must keep ≥ 2 model options after r10 (currently expecting Gemini/OpenAI/Hosted) — found ${modelOptions.length}.`);
 });
 
 // ── fr-88 r11: uniform dimensions in BOTH states ──

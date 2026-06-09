@@ -14,7 +14,7 @@
 //   - The "critic: gemini button" the user sees is actually the
 //     <select id="composer-critic-select"> at index.html line ~190.
 //     Its options carry verbose labels ("⚖️ Critic: Gemini",
-//     "⚖️ Critic: Codex", "⚖️ Critic: Hosted") so the rendered
+//     "⚖️ Critic: OpenAI", "⚖️ Critic: Hosted") so the rendered
 //     select sizes to ~120px to fit. styles.css's .composer-critic-
 //     select rule has NO max-width and NO mobile media-query override,
 //     so on a 360-380px viewport the select crowds the chat input.

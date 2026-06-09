@@ -1,7 +1,7 @@
 # critic.md — accumulated critic rules
 
 This file holds project-specific critic rules + anti-patterns that
-extend the base system prompt of any critic (Gemini / Codex /
+extend the base system prompt of any critic (Gemini / OpenAI /
 Custom) running on this myco workspace. It is **read on every
 critique run** and **appended to the critic's system prompt** as
 authoritative project context.

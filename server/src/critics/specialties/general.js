@@ -7,7 +7,7 @@
 // runs behind a pause.
 //
 // Specialty modules contribute ONLY a focus suffix to the system
-// instruction — the model wrapper (gemini/codex/custom) is unchanged,
+// instruction — the model wrapper (gemini/openai/custom) is unchanged,
 // and the heavy user-prompt tail (diff + file context + history) is
 // identical across the fan-out. That identical-tail shape is what
 // gives Gemini 2.5's prefix cache something to reuse across the three
