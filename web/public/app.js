@@ -8317,6 +8317,7 @@ function _renderVerdictPanel() {
   // awareness but don't pause the run queue. Render with a
   // [Checkpoint] badge so the user knows this isn't the final.
   const isIntermediate = !!review.isIntermediate;
+  const isSkipped = !!review.isSkipped;
   const stageLabel = isIntermediate && review.stage ? String(review.stage).toLowerCase() : '';
 
   const isAgreed = !isError && !review.hasDisagreement;
@@ -8324,6 +8325,8 @@ function _renderVerdictPanel() {
   let titleText;
   if (isError) {
     titleText = 'Critic Error — Retry?';
+  } else if (isSkipped) {
+    titleText = isIntermediate ? `✓ Critic Skipped Checkpoint (${stageLabel})` : '✓ Critic Skipped — No Changes';
   } else if (isAgreed) {
     titleText = isIntermediate ? `✓ Gemini Approved Checkpoint (${stageLabel})` : '✓ Gemini Approved Claude\'s Changes';
   } else {
@@ -8365,42 +8368,21 @@ function _renderVerdictPanel() {
   // userPrompt handling was already shipped in bug-52. Adding this
   // button is pure UI plumbing; no server changes needed.
   const askCriticBtn = `<button class="verdict-btn verdict-btn-ask" disabled title="Type a question above to enable — the critic re-fires and addresses your question alongside its standard review">💬 Ask Critic</button>`;
+  const retryBtn = `<button class="verdict-btn verdict-btn-retry" title="Re-fire the critique against the same diff">↻ Retry</button>`;
+  // Skipped verdicts have no diff to critique — omit Ask Critic + Retry.
+  const criticActionBtns = isSkipped ? '' : askCriticBtn + retryBtn;
   let actionsHtml;
   if (isError) {
-    // td-33 r1 (Gemini critique catch): on error give the user an
-    // ESCAPE HATCH too. If retries keep failing (e.g. Gemini quota
-    // exhausted, prolonged 503), Retry-only would leave the user
-    // stuck staring at an error panel. Dismiss hides it so they can
-    // move on (queue isn't paused on error per the server-side
-    // gate, so dismissing just clears the panel and they're back
-    // to a clean state).
     actionsHtml = askCriticBtn +
       `<button class="verdict-btn verdict-btn-retry" title="Re-fire the critique against the same diff (use this on Gemini 503 / network errors)">↻ Retry</button>` +
       `<button class="verdict-btn verdict-btn-dismiss" title="Dismiss the error panel and continue without a critic verdict (queue is not paused on critic errors)">✗ Dismiss</button>`;
   } else if (isIntermediate) {
-    // bug-56: intermediate (stage-checkpoint) verdict pane now
-    // carries ✓ Accept Stage + ⚡ Ask Claude to Fix Stage buttons
-    // (per the §9 3-stage methodology: each stage's verdict needs
-    // its own accept/fix paths, not just the final one). The button
-    // row order is left-to-right:
-    //   💬 Ask Critic — re-fire critic with a question (bug-53)
-    //   ↻ Retry — re-fire critic as-is
-    //   ✓ Accept Stage (NEW) — accept this stage, signal Claude to
-    //     advance to the next stage. Routes via a chat message
-    //     [stage-accept] that Claude reads as the advance signal.
-    //     Does NOT call /run/done — only the FINAL critique Accept
-    //     ends the run (bug-57).
-    //   ⚡ Ask Claude to Fix Stage (NEW) — send the critic's flagged
-    //     issues to Claude as a redo-this-stage prompt.
-    //   ✗ Dismiss — close the pane without a semantic decision
-    //     (user wants to decide later).
-    actionsHtml = askCriticBtn +
-      `<button class="verdict-btn verdict-btn-retry" title="Re-fire the checkpoint critique against the same diff">↻ Retry</button>` +
+    actionsHtml = criticActionBtns +
       `<button class="verdict-btn verdict-btn-accept-stage" title="Accept this stage's verdict and signal Claude to proceed to the next stage (analyze → code → verify)">✓ Accept Stage</button>` +
       `<button class="verdict-btn verdict-btn-fix-stage" title="Send the critic's flagged issues to Claude as a redo-this-stage prompt">⚡ Ask Claude to Fix Stage</button>` +
       `<button class="verdict-btn verdict-btn-dismiss" title="Dismiss the checkpoint without a decision (decide later — pane will not auto-reopen)">✗ Dismiss</button>`;
   } else {
-    actionsHtml = askCriticBtn +
+    actionsHtml = criticActionBtns +
       `<button class="verdict-btn verdict-btn-discard" title="Discard git changes and abort task">✗ Discard</button>` +
       `<button class="verdict-btn verdict-btn-fix" title="Ask Claude to fix issues flagged by Gemini">⚡ Ask Claude to Fix</button>` +
       `<button class="verdict-btn verdict-btn-accept" title="Accept Claude's changes and resume the run queue">✓ Accept Claude</button>`;
@@ -8424,11 +8406,11 @@ function _renderVerdictPanel() {
   // no Discard/Fix/Accept button routed to /critique/retry. User
   // reported (verbatim): "not sure which button to click, it's not
   // clear how the question is handled."
-  const userPromptHtml =
-    `<div class="verdict-user-prompt-wrap">` +
+  const userPromptHtml = isSkipped ? '' :
+    (`<div class="verdict-user-prompt-wrap">` +
       `<label for="verdict-user-prompt-input" class="verdict-user-prompt-label">Ask the critic to look into something specific (optional):</label>` +
       `<textarea id="verdict-user-prompt-input" class="verdict-user-prompt-input" placeholder="e.g. did you check the case where the user is offline? did you consider rate limits on the retry button?" rows="2" maxlength="2048"></textarea>` +
-    `</div>`;
+    `</div>`);
 
   // bug-69: when this verdict is a retry that carried the user's
   // follow-up question (via the bug-53 Ask Critic button), render a
