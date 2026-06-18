@@ -9617,98 +9617,203 @@ function bindChatUi() {
   _setupChatClarify();   // fr-85: select-text-in-claude-bubble → popover
 }
 
-// Voice input: browser-local speech-to-text via the Web Speech API.
-// On-device on Safari (Apple's native speech) + recent Chrome with
-// processLocally; older Chrome may use Google's cloud (still
-// browser-mediated, no myco server involvement). Falls back to a
-// hidden button if the API isn't exposed at all.
+// Voice input: press-and-hold the 🎙 button to record audio via
+// MediaRecorder, then POST the blob to myco's /whisper/transcribe
+// proxy (which forwards to the whisper-diarization server and tags
+// segments with the signed-in user's speaker_name). The returned
+// transcript is appended to the chat composer via _joinSpoken.
 //
-// Flow: click 🎙 → recognition.start() → interim transcripts stream
-// into the textarea as the user speaks → final commits land on
-// silence pause → click again to stop. textInput retains base text
-// the user typed manually; voice is appended (not replacing). Auto-
-// stops on the engine's `end` event (engine policy varies, but most
-// stop after ~5s of silence).
+// Flow: pointerdown → getUserMedia + MediaRecorder.start → red pulse
+// (.chat-mic-recording) → pointerup (on window) → stop + upload →
+// blue spinner (.chat-mic-transcribing) → transcript appended +
+// flashToast. pointerleave / pointercancel during the hold cancels
+// and discards the recording. The button is hidden entirely when
+// state.whisperConfigured is false (no whisper server configured).
 function _bindVoiceInput() {
   const btn = document.getElementById('chat-mic');
   const input = document.getElementById('chat-input');
   if (!btn || !input) return;
   if (btn.dataset.bound === '1') return;
   btn.dataset.bound = '1';
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SR) {
-    // Browser doesn't support SpeechRecognition — keep the button
-    // hidden so the composer isn't broken on Firefox / older
-    // Safari / WebView etc. (HTML had `hidden` attribute by
-    // default; we leave it alone here.)
+
+  if (!state.whisperConfigured) {
+    btn.hidden = true;
+    btn.disabled = true;
     return;
   }
-  btn.hidden = false;
-  let recognition = null;
+
+  let mediaRecorder = null;
+  let mediaStream = null;
+  let audioChunks = [];
+  let recordStartTs = 0;
   let recording = false;
-  let baseText = '';     // textarea content BEFORE recording started
+  let cancelled = false;
+  let pendingPointerUp = null;
 
-  const stopVoice = () => {
+  const MIME_TYPES = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'];
+
+  function pickMimeType() {
+    for (const t of MIME_TYPES) {
+      if (window.MediaRecorder && MediaRecorder.isTypeSupported(t)) return t;
+    }
+    return '';
+  }
+
+  function extFor(mime) {
+    if (mime.includes('webm')) return 'webm';
+    if (mime.includes('mp4')) return 'mp4';
+    return 'bin';
+  }
+
+  function stopStreamTracks() {
+    if (mediaStream) {
+      mediaStream.getTracks().forEach(function (t) { t.stop(); });
+      mediaStream = null;
+    }
+  }
+
+  function resetButton() {
+    btn.classList.remove('chat-mic-recording', 'chat-mic-transcribing');
+    btn.disabled = false;
+  }
+
+  async function startRecording() {
+    cancelled = false;
+    audioChunks = [];
+    try {
+      mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    } catch (err) {
+      warnToast('Microphone access denied — check browser permissions');
+      return false;
+    }
+    const mime = pickMimeType();
+    try {
+      mediaRecorder = mime
+        ? new MediaRecorder(mediaStream, { mimeType: mime, audioBitsPerSecond: 64000 })
+        : new MediaRecorder(mediaStream, { audioBitsPerSecond: 64000 });
+    } catch (err) {
+      warnToast('Recording failed: ' + (err.message || err));
+      stopStreamTracks();
+      return false;
+    }
+    mediaRecorder.ondataavailable = function (e) {
+      if (e.data && e.data.size > 0) audioChunks.push(e.data);
+    };
+    mediaRecorder.onerror = function () {
+      warnToast('Recording failed');
+      stopStreamTracks();
+      resetButton();
+      recording = false;
+    };
+    mediaRecorder.start();
+    recordStartTs = Date.now();
+    recording = true;
+    btn.classList.add('chat-mic-recording');
+    return true;
+  }
+
+  function cancelRecording() {
+    cancelled = true;
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+      mediaRecorder.stop();
+    }
+    stopStreamTracks();
     recording = false;
-    btn.classList.remove('chat-mic-recording');
-    btn.setAttribute('aria-pressed', 'false');
-    recognition = null;
-  };
+    resetButton();
+  }
 
-  btn.addEventListener('click', (e) => {
-    e.preventDefault();
-    if (recording) {
-      try { recognition && recognition.stop(); } catch {}
+  async function stopAndTranscribe() {
+    if (!recording || cancelled) return;
+    recording = false;
+    const duration = Date.now() - recordStartTs;
+    if (duration < 200) {
+      if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+      stopStreamTracks();
+      resetButton();
       return;
     }
-    let rec;
-    try { rec = new SR(); }
-    catch (err) { console.warn('[voice] init failed:', err); return; }
-    // Prefer the client's locale; fall back to en-US.
-    try { rec.lang = navigator.language || 'en-US'; } catch {}
-    rec.continuous = true;
-    rec.interimResults = true;
-    // processLocally (Chrome 137+ flag) forces on-device speech.
-    // Setting it on browsers that don't recognize the property is
-    // a no-op. Safari is on-device by default for the system mic
-    // permission grant.
-    try { rec.processLocally = true; } catch {}
-    baseText = input.value;
-    rec.onresult = (ev) => {
-      let interim = '';
-      let final = '';
-      for (let i = ev.resultIndex; i < ev.results.length; i++) {
-        const tr = ev.results[i][0] && ev.results[i][0].transcript;
-        if (!tr) continue;
-        if (ev.results[i].isFinal) final += tr;
-        else interim += tr;
+    const mime = mediaRecorder ? mediaRecorder.mimeType : '';
+    const stopped = new Promise(function (resolve) {
+      if (!mediaRecorder || mediaRecorder.state === 'inactive') { resolve(); return; }
+      mediaRecorder.onstop = resolve;
+      mediaRecorder.stop();
+    });
+    await stopped;
+    stopStreamTracks();
+    if (audioChunks.length === 0) {
+      warnToast('Recording failed — no audio captured');
+      resetButton();
+      return;
+    }
+    const blob = new Blob(audioChunks, { type: mime || 'audio/webm' });
+    btn.classList.remove('chat-mic-recording');
+    btn.classList.add('chat-mic-transcribing');
+    btn.disabled = true;
+    try {
+      const fd = new FormData();
+      fd.append('audio', blob, 'voice.' + extFor(mime));
+      const resp = await fetch('/whisper/transcribe', { method: 'POST', body: fd });
+      const body = await resp.json().catch(function () { return { detail: 'Invalid response from server' }; });
+      if (!resp.ok) {
+        warnToast('Transcription failed: ' + (body.detail || resp.statusText));
+        resetButton();
+        return;
       }
-      if (final) baseText = _joinSpoken(baseText, final);
-      const next = _joinSpoken(baseText, interim);
+      const segments = body.segments || [];
+      const text = segments.map(function (s) { return (s.text || '').trim(); })
+        .filter(Boolean).join(' ');
+      if (!text) {
+        warnToast('No speech detected');
+        resetButton();
+        return;
+      }
+      const next = _joinSpoken(input.value, text);
       if (next !== input.value) {
         input.value = next;
         input.dispatchEvent(new Event('input', { bubbles: true }));
         try {
           const end = input.value.length;
           input.setSelectionRange(end, end);
-        } catch {}
+        } catch (e) {}
       }
-    };
-    rec.onerror = (ev) => {
-      // "no-speech" / "aborted" / "audio-capture" — log + bail.
-      console.warn('[voice] recognition error:', ev.error || ev);
-      stopVoice();
-    };
-    rec.onend = stopVoice;
-    try {
-      rec.start();
-      recognition = rec;
-      recording = true;
-      btn.classList.add('chat-mic-recording');
-      btn.setAttribute('aria-pressed', 'true');
+      flashToast('Transcript added');
     } catch (err) {
-      console.warn('[voice] start threw:', err);
+      warnToast('Transcription service unavailable');
+    } finally {
+      resetButton();
     }
+  }
+
+  btn.addEventListener('pointerdown', async function (e) {
+    e.preventDefault();
+    if (recording) return;
+    btn.disabled = true;
+    const ok = await startRecording();
+    if (!ok) { resetButton(); return; }
+    pendingPointerUp = function () {
+      window.removeEventListener('pointerup', pendingPointerUp);
+      pendingPointerUp = null;
+      stopAndTranscribe();
+    };
+    window.addEventListener('pointerup', pendingPointerUp);
+  });
+
+  btn.addEventListener('pointerleave', function () {
+    if (!recording || cancelled) return;
+    if (pendingPointerUp) {
+      window.removeEventListener('pointerup', pendingPointerUp);
+      pendingPointerUp = null;
+    }
+    cancelRecording();
+  });
+
+  btn.addEventListener('pointercancel', function () {
+    if (!recording || cancelled) return;
+    if (pendingPointerUp) {
+      window.removeEventListener('pointerup', pendingPointerUp);
+      pendingPointerUp = null;
+    }
+    cancelRecording();
   });
 }
 
