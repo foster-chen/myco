@@ -4839,6 +4839,23 @@ test_chat_window() {
   # prefers webm;codecs=opus, POSTs to /whisper/transcribe, appends via
   # _joinSpoken, and CSS has the transcribing spinner + no WIP strikethrough.
   node_test_result test/voice-input-client.test.js "test/voice-input-client.test.js (11 cases)"
+  # Meeting-upload proxy route: POST /whisper/transcribe-meeting must use
+  # Mode 2 (skip_diarization=false, no speaker_name), filter by
+  # loadAllowlist, populate pendingIdentification (task-3 stub), branch on
+  # providerId for the OpenAI stub, and return 422 on no known-user speech.
+  node_test_result test/meeting-proxy-route.test.js "test/meeting-proxy-route.test.js (10 cases)"
+  # Meeting-summary capture: _persistAssistantTextToRecChat accumulates into
+  # _pendingMeetingSummary (without suppressing the normal fromAgent row),
+  # turn_result handler truncates to first sentence + emits meeting-summary.
+  node_test_result test/meeting-summary-capture.test.js "test/meeting-summary-capture.test.js (5 cases)"
+  # Meeting WS frame: attach.js registers a meeting-summary listener that
+  # forwards { t: 'meeting-summary', ...payload } to attached WS clients.
+  node_test_result test/meeting-ws-frame.test.js "test/meeting-ws-frame.test.js (2 cases)"
+  # Meeting-upload client wiring: #chat-meeting button in HTML, hidden file
+  # input with accept="audio/*", _bindMeetingUpload POSTs to
+  # /whisper/transcribe-meeting with sessionId, validates audio type,
+  # collapsible bubble render branch, meeting-summary WS handler.
+  node_test_result test/meeting-button-client.test.js "test/meeting-button-client.test.js (12 cases)"
   # Architecture doc — Project Purpose section is the canonical
   # statement of why Mycelium exists (on-top-of-project, surface
   # problems, suggest better approaches). Red-flips if someone
@@ -5216,6 +5233,70 @@ run_server_smoke() {
   test_invalid_share_token_rejected
   test_cache_headers
   stop_smoke_server
+
+  # ── Meeting diarization smoke test ──
+  # Boots a mock whisper server returning canned diarized segments,
+  # then POSTs to /whisper/transcribe-meeting and asserts the route
+  # reached the session-check (409 = WHISPER_SERVER_URL configured +
+  # multer parsed the file, but no live AgentSession for the test
+  # session id). A 503 would mean WHISPER_SERVER_URL wasn't configured.
+  local MEETING_MOCK_PORT
+  MEETING_MOCK_PORT=$(free_port)
+  node -e "
+    const http = require('http');
+    const srv = http.createServer((req, res) => {
+      if (req.url === '/health') { res.setHeader('content-type','application/json'); res.end(JSON.stringify({status:'ready'})); return; }
+      let body = '';
+      req.on('data', c => body += c);
+      req.on('end', () => {
+        res.setHeader('content-type','application/json');
+        res.end(JSON.stringify({
+          segments: [
+            {speaker:'kkrazy',start_time:0,end_time:5000,text:'hello world'},
+            {speaker:'Speaker 0',start_time:6000,end_time:9000,text:'mystery voice'}
+          ],
+          srt: null, language: 'en', processing_time_seconds: 0.1
+        }));
+      });
+    });
+    srv.listen($MEETING_MOCK_PORT);
+  " &
+  local MOCK_PID=$!
+  sleep 0.5
+  local MEETING_SMOKE_PORT
+  MEETING_SMOKE_PORT=$(free_port)
+  WHISPER_SERVER_URL="http://127.0.0.1:$MEETING_MOCK_PORT" \
+  PORT="$MEETING_SMOKE_PORT" \
+  MYCO_STATE_DIR="$(mktemp -d)" \
+  node server/src/index.js &
+  local SMOKE_PID=$!
+  local waited=0
+  while ! curl -sf -o /dev/null --max-time 1 "http://127.0.0.1:$MEETING_SMOKE_PORT/" 2>/dev/null; do
+    if ! kill -0 "$SMOKE_PID" 2>/dev/null; then
+      echo "meeting smoke server died during boot" >&2
+      kill "$MOCK_PID" 2>/dev/null || true
+      return 1
+    fi
+    sleep 0.25
+    waited=$((waited + 1))
+    if [ "$waited" -gt 40 ]; then
+      echo "meeting smoke server failed to bind within 10s" >&2
+      kill "$SMOKE_PID" "$MOCK_PID" 2>/dev/null || true
+      return 1
+    fi
+  done
+  local meeting_resp
+  meeting_resp=$(curl -sS -X POST "http://127.0.0.1:$MEETING_SMOKE_PORT/whisper/transcribe-meeting" \
+    -F "audio=@test/fixtures/tiny.wav" \
+    -F "sessionId=test-meeting-smoke" 2>&1 || true)
+  if grep -q "Session not active" <<<"$meeting_resp"; then
+    pass "meeting smoke: route reached session-check (WHISPER_SERVER_URL configured + multer parsed file)"
+  elif grep -q "Whisper server not configured" <<<"$meeting_resp"; then
+    fail "meeting smoke: WHISPER_SERVER_URL not propagated to the meeting route"
+  else
+    fail "meeting smoke: unexpected response — $meeting_resp"
+  fi
+  kill "$SMOKE_PID" "$MOCK_PID" 2>/dev/null || true
 }
 
 # ─── docker build ────────────────────────────────────────────────────────────
