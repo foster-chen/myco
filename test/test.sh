@@ -4833,6 +4833,12 @@ test_chat_window() {
   # inject speaker_name from req.user (not client form data), forward audio
   # via fetch+FormData, and relay whisper response status+body to client.
   node_test_result test/whisper-proxy-route.test.js "test/whisper-proxy-route.test.js (8 cases)"
+  # Voice-input client wiring: state.whisperConfigured, tryToken reads it,
+  # #chat-mic visibility JS-driven (no hidden/disabled in HTML), _bindVoiceInput
+  # uses MediaRecorder + getUserMedia + Pointer Events (not SpeechRecognition),
+  # prefers webm;codecs=opus, POSTs to /whisper/transcribe, appends via
+  # _joinSpoken, and CSS has the transcribing spinner + no WIP strikethrough.
+  node_test_result test/voice-input-client.test.js "test/voice-input-client.test.js (11 cases)"
   # Architecture doc — Project Purpose section is the canonical
   # statement of why Mycelium exists (on-top-of-project, surface
   # problems, suggest better approaches). Red-flips if someone
