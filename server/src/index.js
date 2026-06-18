@@ -245,6 +245,7 @@ app.get('/auth/check', (req, res) => {
       user: profile.login,
       name: profile.name || null,
       avatar_url: profile.avatarUrl || null,
+      whisperConfigured: !!process.env.WHISPER_SERVER_URL,
     });
   }
   res.json({ ok: false, required: isAuthRequired(), login: 'github', user: null });

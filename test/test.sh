@@ -4824,6 +4824,11 @@ test_chat_window() {
   # getChatHistory, and the agent-replay client handler. Touching any
   # of those interfaces without keeping this test green is a regression.
   node_test_result test/chat-persistence-contract.test.js "test/chat-persistence-contract.test.js (25 cases)"
+  # Voice-input button gating: /auth/check must surface whisperConfigured
+  # (derived from WHISPER_SERVER_URL) so the client can decide whether to
+  # show #chat-mic. Share-token branch must NOT carry it (no user identity
+  # for speaker_name).
+  node_test_result test/whisper-auth-check.test.js "test/whisper-auth-check.test.js (2 cases)"
   # Architecture doc — Project Purpose section is the canonical
   # statement of why Mycelium exists (on-top-of-project, surface
   # problems, suggest better approaches). Red-flips if someone
