@@ -449,6 +449,16 @@ function escHtml(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+function _fmtMeetingTs(ms) {
+  var totalSec = Math.floor((ms || 0) / 1000);
+  var h = Math.floor(totalSec / 3600);
+  var m = Math.floor((totalSec % 3600) / 60);
+  var s = totalSec % 60;
+  return h > 0
+    ? String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0')
+    : String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+}
+
 // fr-77 r14: Lucide-style SVG icon registry. The chrome cluster
 // (#btn-files / btn-plan / btn-arch / btn-test / btn-chat) is built
 // from inline SVGs with viewBox="0 0 24 24" + stroke="currentColor" +
@@ -2389,6 +2399,35 @@ function openSession(id, opts = {}) {
         // can render it in place without the question or the reply
         // polluting chat history.
         _handleClarifyReplyFrame(msg);
+      } else if (msg.t === 'meeting-summary') {
+        // Update the meeting bubble's collapsed summary. Match by meetingId
+        // (or seq fallback). Re-render the summary line in place.
+        const list = document.getElementById('chat-messages');
+        if (list) {
+          const selector = msg.meetingId
+            ? '.meeting-bubble[data-meeting-id="' + CSS.escape(msg.meetingId) + '"]'
+            : '.meeting-bubble[data-seq="' + msg.seq + '"]';
+          const bubble = list.querySelector(selector);
+          if (bubble) {
+            const oldSummary = bubble.querySelector('.meeting-bubble-summary');
+            if (oldSummary && typeof msg.summary === 'string') {
+              const newSummary = document.createElement('div');
+              newSummary.className = 'meeting-bubble-summary';
+              newSummary.textContent = '💬 ' + msg.summary;
+              oldSummary.replaceWith(newSummary);
+            }
+          }
+        }
+        // Also update state.chatMessages so a re-render uses the summary.
+        for (let i = 0; i < state.chatMessages.length; i++) {
+          const cm = state.chatMessages[i];
+          if (cm && cm.meta && cm.meta.kind === 'meeting-transcript' &&
+              ((msg.meetingId && cm.meta.meetingId === msg.meetingId) ||
+               (msg.seq && cm.meta.seq === msg.seq))) {
+            cm.meta.summary = msg.summary;
+            break;
+          }
+        }
       } else if (msg.t === 'exit') {
         state.term?.writeln('\r\n[session ended]');
         // bug-37: session is fully gone — there's nothing to stop.
@@ -5640,6 +5679,29 @@ function _shouldSkipMessageRender(m) {
 function renderChatMessage(m, isActiveMenu) {
   if (_shouldSkipMessageRender(m)) {
     return '';
+  }
+  // Meeting transcript: collapsible bubble with header + summary + expand.
+  // Collapsed by default; click header toggles .meeting-bubble-expanded.
+  // The full transcript (meta.transcript) renders in the expanded section.
+  if (m && m.meta && m.meta.kind === 'meeting-transcript') {
+    const summary = m.meta.summary;
+    const summaryLine = summary
+      ? '<div class="meeting-bubble-summary">💬 ' + escHtml(summary) + '</div>'
+      : (m.meta.openaiStub
+        ? '<div class="meeting-bubble-summary meeting-bubble-summary-stub">Summary unavailable (OpenAI path)</div>'
+        : '<div class="meeting-bubble-summary meeting-bubble-summary-pending">Generating summary...</div>');
+    const transcriptHtml = (m.meta.transcript || []).map(function (seg) {
+      const ts = _fmtMeetingTs(seg.startMs);
+      return '<div class="meeting-bubble-seg">[' + ts + '] <b>' + escHtml(seg.speaker) + '</b>: ' + escHtml(seg.text) + '</div>';
+    }).join('');
+    return '<div class="chat-msg meeting-bubble" data-meeting-id="' + escHtml(m.meta.meetingId || '') + '" data-seq="' + (m.meta.seq || '') + '">' +
+      '<div class="meeting-bubble-header">' +
+        '<span class="meeting-bubble-text">' + escHtml(m.text) + '</span>' +
+        '<span class="meeting-bubble-chevron">▸</span>' +
+      '</div>' +
+      summaryLine +
+      '<div class="meeting-bubble-transcript">' + transcriptHtml + '</div>' +
+      '</div>';
   }
   const fromClaude = m.user === 'claude';
   const fromSelf = state.chatUser && m.user === state.chatUser;
@@ -9615,6 +9677,7 @@ function bindChatUi() {
   _bindStopAgent();
   _bindVoiceInput();
   _bindMeetingUpload();
+  _bindMeetingBubbleToggle();
   _setupChatClarify();   // fr-85: select-text-in-claude-bubble → popover
 }
 
@@ -9892,6 +9955,25 @@ function _bindMeetingUpload() {
       }
       resetButton();
     }
+  });
+}
+
+// Collapsible meeting bubble: click the header to toggle expanded/collapsed.
+// Uses event delegation on #chat-messages so it works for bubbles loaded
+// via chat-history pagination too.
+function _bindMeetingBubbleToggle() {
+  const list = document.getElementById('chat-messages');
+  if (!list) return;
+  if (list.dataset.meetingToggleBound === '1') return;
+  list.dataset.meetingToggleBound = '1';
+  list.addEventListener('click', function (e) {
+    const header = e.target.closest('.meeting-bubble-header');
+    if (!header) return;
+    const bubble = header.closest('.meeting-bubble');
+    if (!bubble) return;
+    bubble.classList.toggle('meeting-bubble-expanded');
+    const chevron = header.querySelector('.meeting-bubble-chevron');
+    if (chevron) chevron.textContent = bubble.classList.contains('meeting-bubble-expanded') ? '▾' : '▸';
   });
 }
 

@@ -69,5 +69,31 @@ t('_bindMeetingUpload validates file type is audio', () => {
     '_bindMeetingUpload must validate the selected file type is audio (file.type.startsWith("audio/") or similar)');
 });
 
+t('renderChatMessage has a meeting-transcript branch', () => {
+  assert.ok(/meeting-transcript/.test(APP),
+    'renderChatMessage (or the render path) must have a branch for meta.kind === "meeting-transcript" that renders a collapsible bubble');
+  assert.ok(/meeting-bubble/.test(APP),
+    'render path must use a "meeting-bubble" CSS class for the collapsible bubble container');
+});
+
+t('meeting bubble has expand/collapse toggle', () => {
+  assert.ok(/meeting-bubble.*expand|toggle.*meeting|collapsed|expanded/.test(APP),
+    'meeting bubble must have an expand/collapse toggle (click on header toggles a class)');
+});
+
+t('meeting-summary WS frame handler exists in app.js', () => {
+  assert.ok(/meeting-summary/.test(APP),
+    "app.js must handle the 'meeting-summary' WS frame (updates the meeting bubble's collapsed summary)");
+});
+
+t('meeting-summary handler updates meta.summary by meetingId or seq', () => {
+  const m = APP.match(/meeting-summary[\s\S]{0,800}/);
+  assert.ok(m, 'could not locate meeting-summary handler region');
+  assert.ok(/summary/.test(m[0]),
+    'meeting-summary handler must update the summary on the matched meeting bubble');
+  assert.ok(/meetingId|seq/.test(m[0]),
+    'meeting-summary handler must match the bubble by meetingId or seq');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
