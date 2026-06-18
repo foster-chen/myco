@@ -9680,6 +9680,10 @@ function _bindVoiceInput() {
   async function startRecording() {
     cancelled = false;
     audioChunks = [];
+    if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+      warnToast('Microphone requires HTTPS — access this site via HTTPS or localhost');
+      return false;
+    }
     try {
       mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
     } catch (err) {
