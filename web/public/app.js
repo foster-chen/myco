@@ -9756,7 +9756,7 @@ function _bindVoiceInput() {
     try {
       const fd = new FormData();
       fd.append('audio', blob, 'voice.' + extFor(mime));
-      const resp = await fetch('/whisper/transcribe', { method: 'POST', body: fd });
+      const resp = await fetch('/whisper/transcribe', { method: 'POST', headers: authHeaders(), body: fd });
       const body = await resp.json().catch(function () { return { detail: 'Invalid response from server' }; });
       if (!resp.ok) {
         warnToast('Transcription failed: ' + (body.detail || resp.statusText));
