@@ -1253,6 +1253,36 @@ class AgentSession extends EventEmitter {
         }
         this._pendingClarify = null;
       }
+      // Meeting-summary capture: if a meeting transcript was sent to Claude
+      // and we've been accumulating the reply text, truncate to the first
+      // sentence, persist it to the meeting row's meta.summary, and emit a
+      // 'meeting-summary' event so attach.js broadcasts it to all clients.
+      if (this._pendingMeetingSummary) {
+        try {
+          const fullSummary = String(this._pendingMeetingSummary.summaryText || '').trim();
+          const firstSentence = (fullSummary.split(/(?<=[.!?])\s/)[0] || fullSummary).trim();
+          const sessionsMod = require('./sessions');
+          const rec = sessionsMod.getSessionRecord(this.sessionId);
+          if (rec && Array.isArray(rec.chat)) {
+            for (const row of rec.chat) {
+              if (row && row.meta && row.meta.seq === this._pendingMeetingSummary.chatRowSeq) {
+                row.meta.summary = firstSentence;
+                break;
+              }
+            }
+            sessionsMod.saveStore();
+          }
+          this.emit('meeting-summary', {
+            meetingId: this._pendingMeetingSummary.meetingId,
+            seq: this._pendingMeetingSummary.chatRowSeq,
+            summary: firstSentence,
+          });
+          console.log(`[meeting-summary] ${this.sessionId} captured summary (${firstSentence.length} chars) for meeting ${this._pendingMeetingSummary.meetingId}`);
+        } catch (err) {
+          console.error(`[meeting-summary] ${this.sessionId} capture failed: ${err && err.message ? err.message : err}`);
+        }
+        this._pendingMeetingSummary = null;
+      }
       this._emit({
         type: 'turn_result',
         subtype: m.subtype,
@@ -2030,6 +2060,16 @@ class AgentSession extends EventEmitter {
     // WS emit moved to the result handler so all chunks
     // (assistant_text-block path + result-fallback path) coalesce
     // into one popover update.
+    // Meeting-summary accumulation (mirrors _pendingClarify but does NOT
+    // suppress the normal fromAgent row or agent-event emit — Approach A:
+    // Claude's reply renders as a normal bubble AND the text is captured
+    // for the meeting bubble's collapsed summary). The turn_result handler
+    // reads summaryText, truncates to the first sentence, persists it to
+    // the meeting row's meta.summary, and emits a 'meeting-summary' event.
+    if (this._pendingMeetingSummary) {
+      this._pendingMeetingSummary.summaryText =
+        (this._pendingMeetingSummary.summaryText || '') + trimmed + '\n';
+    }
     if (this._pendingClarify) {
       msg.meta.kind = 'clarify-reply';
       msg.meta.clarifyQuestionTs = this._pendingClarify.questionTs;
