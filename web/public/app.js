@@ -66,6 +66,7 @@ const state = {
   // Discussion state, scoped per active session. Cleared on switch.
   chatMessages: [],
   chatUser: null,
+  whisperConfigured: false,
   // Default true on real desktop (≥1200px) AND on mobile (≤900px):
   //   - Desktop: chat pane + readonly transcript in 50/50 split.
   //   - Mobile: chat IS the default view — it fills the whole main
@@ -330,6 +331,7 @@ async function tryToken(token) {
     console.log('[admin-diag] tryToken: /auth/check body parsed:', JSON.stringify(body));
     if (body.ok && body.user) {
       state.chatUser = body.user;
+      state.whisperConfigured = !!body.whisperConfigured;
       console.log('[admin-diag] tryToken: successfully resolved state.chatUser to:', state.chatUser);
     } else {
       console.log('[admin-diag] tryToken: body is not ok or user is missing. body.ok:', body.ok, 'body.user:', body.user);
