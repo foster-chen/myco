@@ -9614,6 +9614,7 @@ function bindChatUi() {
   _bindPermModalKeys();
   _bindStopAgent();
   _bindVoiceInput();
+  _bindMeetingUpload();
   _setupChatClarify();   // fr-85: select-text-in-claude-bubble → popover
 }
 
@@ -9818,6 +9819,79 @@ function _bindVoiceInput() {
       pendingPointerUp = null;
     }
     cancelRecording();
+  });
+}
+
+// Meeting upload: click #chat-meeting → hidden file picker → POST the
+// selected audio file to /whisper/transcribe-meeting (the myco proxy that
+// forwards to whisper Mode 2, filters by allowlist, persists a collapsible
+// meeting bubble, and sends the transcript to Claude). The meeting bubble
+// arrives via the 'chat' WS frame; the summary arrives later via the
+// 'meeting-summary' WS frame. The button is hidden when
+// state.whisperConfigured is false (no whisper server configured).
+function _bindMeetingUpload() {
+  const btn = document.getElementById('chat-meeting');
+  const fileInput = document.getElementById('meeting-file-input');
+  if (!btn || !fileInput) return;
+  if (btn.dataset.bound === '1') return;
+  btn.dataset.bound = '1';
+
+  if (!state.whisperConfigured) {
+    btn.hidden = true;
+    btn.disabled = true;
+    return;
+  }
+
+  function resetButton() {
+    btn.classList.remove('chat-meeting-busy');
+    btn.disabled = false;
+  }
+
+  btn.addEventListener('click', function () {
+    if (btn.disabled) return;
+    fileInput.value = '';
+    fileInput.click();
+  });
+
+  fileInput.addEventListener('change', async function () {
+    const file = fileInput.files && fileInput.files[0];
+    if (!file) return;
+    if (!file.type || !file.type.startsWith('audio/')) {
+      warnToast('Please choose an audio file (wav, mp3, m4a, etc.)');
+      return;
+    }
+    btn.classList.add('chat-meeting-busy');
+    btn.disabled = true;
+    flashToast('Uploading + transcribing — this may take a few minutes for long recordings');
+    try {
+      const fd = new FormData();
+      fd.append('audio', file, file.name);
+      fd.append('sessionId', state.activeId || '');
+      const controller = new AbortController();
+      const timeout = setTimeout(function () { controller.abort(); }, 600000);
+      const resp = await fetch('/whisper/transcribe-meeting', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: fd,
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+      const body = await resp.json().catch(function () { return { detail: 'Invalid response from server' }; });
+      if (!resp.ok) {
+        warnToast('Meeting upload failed: ' + (body.detail || resp.statusText));
+        resetButton();
+        return;
+      }
+      flashToast('Meeting transcript added');
+      resetButton();
+    } catch (err) {
+      if (err && err.name === 'AbortError') {
+        warnToast('Meeting upload timed out (10 min)');
+      } else {
+        warnToast('Upload failed — check connection');
+      }
+      resetButton();
+    }
   });
 }
 
