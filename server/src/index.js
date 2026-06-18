@@ -83,6 +83,7 @@ if (process.env.MYCO_ENTERPRISE_TLS_INSECURE === '1' || process.env.NODE_TLS_REJ
 const express = require('express');
 const { WebSocketServer } = require('ws');
 const http = require('http');
+const multer = require('multer');
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
@@ -249,6 +250,45 @@ app.get('/auth/check', (req, res) => {
     });
   }
   res.json({ ok: false, required: isAuthRequired(), login: 'github', user: null });
+});
+
+// ─── Whisper diarization proxy ──────────────────────────────────────────────
+//
+// The browser cannot reach the whisper-diarization server directly (no CORS),
+// so we proxy through myco. The server injects speaker_name from the
+// authenticated user's login — the client never sends it, preventing
+// spoofing of another user's speaker embedding. Returns 503 if
+// WHISPER_SERVER_URL is not configured.
+
+const whisperUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
+
+app.post('/whisper/transcribe', requireAuth, whisperUpload.single('audio'), async (req, res) => {
+  const whisperUrl = process.env.WHISPER_SERVER_URL;
+  if (!whisperUrl) {
+    const err = { detail: 'Whisper server not configured' };
+    return res.status(503).json(err);
+  }
+  if (!req.file) {
+    const err = { detail: 'No audio file provided' };
+    return res.status(400).json(err);
+  }
+  try {
+    const formData = new FormData();
+    formData.append('audio', new Blob([req.file.buffer], { type: req.file.mimetype }),
+      req.file.originalname || 'voice.webm');
+    formData.append('speaker_name', req.user);
+    formData.append('include_srt', 'false');
+    const fetchOpts = { method: 'POST', body: formData };
+    const resp = await fetch(whisperUrl.replace(/\/+$/, '') + '/transcribe', fetchOpts);
+    const body = await resp.text();
+    res.status(resp.status);
+    res.type(resp.headers.get('content-type') || 'application/json');
+    res.send(body);
+  } catch (err) {
+    console.error('[whisper-proxy] error:', err.message);
+    const errBody = { detail: 'Whisper server unreachable: ' + (err.message || err) };
+    res.status(502).json(errBody);
+  }
 });
 
 // ─── GitHub OAuth login ─────────────────────────────────────────────────────

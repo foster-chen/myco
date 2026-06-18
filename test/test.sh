@@ -4829,6 +4829,10 @@ test_chat_window() {
   # show #chat-mic. Share-token branch must NOT carry it (no user identity
   # for speaker_name).
   node_test_result test/whisper-auth-check.test.js "test/whisper-auth-check.test.js (2 cases)"
+  # Voice-input proxy route: POST /whisper/transcribe must be auth-gated,
+  # inject speaker_name from req.user (not client form data), forward audio
+  # via fetch+FormData, and relay whisper response status+body to client.
+  node_test_result test/whisper-proxy-route.test.js "test/whisper-proxy-route.test.js (8 cases)"
   # Architecture doc — Project Purpose section is the canonical
   # statement of why Mycelium exists (on-top-of-project, surface
   # problems, suggest better approaches). Red-flips if someone
