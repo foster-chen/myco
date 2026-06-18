@@ -291,6 +291,193 @@ app.post('/whisper/transcribe', requireAuth, whisperUpload.single('audio'), asyn
   }
 });
 
+// ─── Meeting diarization proxy (Mode 2) ─────────────────────────────────────
+//
+// Unlike the known-speaker proxy above (Mode 3, injects speaker_name),
+// this route sends Mode 2 (skip_diarization=false, no speaker_name) so
+// whisper matches each segment against the full speaker DB. The response
+// is then filtered to keep ONLY segments spoken by known myco users
+// (logins in allowed-github-users.txt). The kept transcript is persisted
+// as a collapsible chat bubble + sent to Claude as a synthetic user turn
+// (SDK mode) so it enters Claude's conversation context. Claude's
+// one-sentence summary is captured back into the bubble header.
+// OpenAI mode is stubbed (no session.write, no summary).
+
+const meetingUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 500 * 1024 * 1024 } });
+
+function _fmtDuration(ms) {
+  const totalSec = Math.round(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  return h > 0 ? `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}` : `${m}:${String(s).padStart(2,'0')}`;
+}
+
+function _fmtTimestamp(ms) {
+  const totalSec = Math.floor(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  return h > 0
+    ? `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`
+    : `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+}
+
+function _buildMeetingTurnText(kept, speakers, durationMs) {
+  const lines = kept.map(function (s) {
+    return '[' + _fmtTimestamp(s.startMs) + '] ' + s.speaker + ': ' + s.text;
+  });
+  return '[Meeting transcript uploaded for context. Respond with ONE sentence summarising what was discussed. Do not analyse unless asked in a follow-up.]\n\n' +
+    'Meeting transcript (' + kept.length + ' segments, ' + speakers.length + ' speakers, duration ' + _fmtDuration(durationMs) + '):\n' +
+    lines.join('\n');
+}
+
+app.post('/whisper/transcribe-meeting', requireAuth, meetingUpload.single('audio'), async (req, res) => {
+  const whisperUrl = process.env.WHISPER_SERVER_URL;
+  if (!whisperUrl) {
+    const err = { detail: 'Whisper server not configured' };
+    return res.status(503).json(err);
+  }
+  if (!req.file) {
+    const err = { detail: 'No audio file provided' };
+    return res.status(400).json(err);
+  }
+  const sessionId = req.body.sessionId;
+  const attachMod = require('./attach');
+  const session = attachMod.getSession && attachMod.getSession(sessionId);
+  if (!session || typeof session.write !== 'function') {
+    const err = { detail: 'Session not active — attach first' };
+    return res.status(409).json(err);
+  }
+  try {
+    // ── 1. Forward to whisper Mode 2 ──
+    const formData = new FormData();
+    formData.append('audio', new Blob([req.file.buffer], { type: req.file.mimetype }),
+      req.file.originalname || 'meeting.bin');
+    formData.append('skip_diarization', 'false');
+    formData.append('include_srt', 'false');
+    formData.append('match_threshold', '0.75');
+    const fetchOpts = { method: 'POST', body: formData };
+    const resp = await fetch(whisperUrl.replace(/\/+$/, '') + '/transcribe', fetchOpts);
+    const body = await resp.json().catch(() => null);
+    if (!body) {
+      const err = { detail: 'Invalid response from whisper server' };
+      return res.status(502).json(err);
+    }
+    if (!resp.ok) {
+      return res.status(resp.status).json(body);
+    }
+    // ── 2. Filter by myco allowlist ──
+    // loadAllowlist() returns a Set (auth.js:194-206), not an array — use
+    // Array.from() so we can map+normalise logins to lowercase before the
+    // membership check against segment speakers.
+    const allowlist = new Set(
+      Array.from(loadAllowlist ? loadAllowlist() : new Set())
+        .map(function (s) { return String(s).toLowerCase().trim(); })
+        .filter(Boolean)
+    );
+    const segments = Array.isArray(body.segments) ? body.segments : [];
+    if (segments.length === 0) {
+      const err = { detail: 'No speech detected in recording' };
+      return res.status(422).json(err);
+    }
+    const kept = [];
+    const pendingById = new Map();
+    for (const seg of segments) {
+      const spk = String(seg.speaker || '').toLowerCase().trim();
+      if (allowlist.has(spk)) {
+        const keptSeg = {
+          speaker: spk,
+          startMs: Number(seg.start_time),
+          endMs: Number(seg.end_time),
+          text: String(seg.text || '').trim(),
+        };
+        kept.push(keptSeg);
+      } else {
+        if (!pendingById.has(spk)) {
+          const pendingEntry = {
+            speakerLabel: String(seg.speaker || ''),
+            segmentCount: 0,
+            sampleText: '',
+          };
+          pendingById.set(spk, pendingEntry);
+        }
+        const p = pendingById.get(spk);
+        p.segmentCount++;
+        if (!p.sampleText) p.sampleText = String(seg.text || '').trim().slice(0, 120);
+      }
+    }
+    if (kept.length === 0) {
+      const err = { detail: 'No speech from known users detected in this recording' };
+      return res.status(422).json(err);
+    }
+    // ── 3. Persist meeting chat row ──
+    // Resolve providerId up front so openaiStub is seeded correctly in the
+    // row literal below — the persisted row, the WS frame, and the in-memory
+    // record must all agree from the first emit (no post-emit mutation).
+    const agentConfig = require('./agent-config');
+    const providerId = agentConfig.resolve().providerId;
+    const durationMs = kept.length ? Math.max.apply(null, kept.map(function (s) { return s.endMs; })) - Math.min.apply(null, kept.map(function (s) { return s.startMs; })) : 0;
+    const speakers = Array.from(new Set(kept.map(function (s) { return s.speaker; })));
+    const meetingId = crypto.randomUUID();
+    const meetingRow = {
+      user: req.user,
+      text: '📁 Meeting transcript — ' + kept.length + ' segments, ' + speakers.length + ' speakers, ' + _fmtDuration(durationMs),
+      ts: new Date().toISOString(),
+      meta: {
+        kind: 'meeting-transcript',
+        meetingId: meetingId,
+        summary: null,
+        durationMs: durationMs,
+        segmentCount: kept.length,
+        speakerCount: speakers.length,
+        speakers: speakers,
+        transcript: kept,
+        pendingIdentification: Array.from(pendingById.values()),
+        audioFileName: req.file.originalname || 'meeting.bin',
+        openaiStub: providerId === 'openai',
+      },
+    };
+    sessionsMod.appendChatMessage(sessionId, meetingRow);
+    session.emit('chat', meetingRow);
+    // ── 4. Branch on session mode ──
+    if (providerId === 'openai') {
+      // OpenAI stub: no session.write, no summary. openaiStub is already
+      // seeded on meetingRow.meta above — just add a visible note.
+      const stubNote = {
+        user: 'claude',
+        text: '(Meeting uploaded — OpenAI path context injection not yet implemented. Transcript is in the bubble above.)',
+        ts: new Date().toISOString(),
+        meta: { kind: 'meeting-stub-note' },
+      };
+      sessionsMod.appendChatMessage(sessionId, stubNote);
+      session.emit('chat', stubNote);
+    } else {
+      // Claude SDK mode: send synthetic turn + set summary capture flag.
+      const transcriptText = _buildMeetingTurnText(kept, speakers, durationMs);
+      try {
+        session._pendingMeetingSummary = {
+          meetingId: meetingId,
+          chatRowSeq: meetingRow.meta.seq,
+          summaryText: '',
+        };
+        session.write(transcriptText);
+      } catch (writeErr) {
+        console.error('[whisper-meeting-proxy] session.write failed:', writeErr.message);
+        session._pendingMeetingSummary = null;
+        // The meeting row is already persisted + broadcast — the user can
+        // see the transcript. The summary just won't be generated.
+      }
+    }
+    // ── 5. Respond ──
+    res.status(200).json(meetingRow);
+  } catch (err) {
+    console.error('[whisper-meeting-proxy] error:', err.message);
+    const errBody = { detail: 'Whisper server unreachable: ' + (err.message || err) };
+    res.status(502).json(errBody);
+  }
+});
+
 // ─── GitHub OAuth login ─────────────────────────────────────────────────────
 //
 // Three routes back the GitHub-SSO login: /auth/github/start kicks the user
