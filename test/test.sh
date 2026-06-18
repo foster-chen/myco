@@ -1950,7 +1950,7 @@ test_openai_sdk_static() {
     || fail "agent-session.js: _pendingOCApprovals field missing"
 
   echo "  Checking no hardcoded api.openai.com URLs outside allowlisted files..."
-  count=$(grep -r "api\.openai\.com" server/src/ --include="*.js" | grep -v agent-config.js | grep -v index.js | grep -v anthropic.js | grep -v critics/codex.js | grep -v "DEFAULT_BASE_URL" | wc -l)
+  count=$(grep -r "api\.openai\.com" server/src/ --include="*.js" | grep -v agent-config.js | grep -v index.js | grep -v anthropic.js | grep -v critics/codex.js | grep -v "DEFAULT_BASE_URL" | wc -l || true)
   test "$count" -eq 0 \
     && pass "no hardcoded api.openai.com URLs outside agent-config.js" \
     || fail "hardcoded api.openai.com URLs found outside agent-config.js"
