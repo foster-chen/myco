@@ -4437,6 +4437,87 @@ html.sidebar-collapsed { --chatpane-w: calc(100vw / 2); }
 }
 .composer-btn-mic[hidden] { display: none !important; }
 
+/* ─── Meeting upload button ─── */
+.composer-btn-meeting {
+  color: var(--text-dim, #888);
+}
+.composer-btn-meeting:hover {
+  color: var(--accent, #4caf82);
+}
+.composer-btn-meeting.chat-meeting-busy {
+  color: var(--accent, #4caf82);
+  pointer-events: none;
+}
+.composer-btn-meeting.chat-meeting-busy .composer-icon {
+  animation: chat-meeting-spin 1s linear infinite;
+}
+@keyframes chat-meeting-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* ─── Meeting transcript bubble (collapsible) ─── */
+.meeting-bubble {
+  border-left: 3px solid var(--accent, #4caf82);
+  background: rgba(76, 175, 130, 0.06);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin: 6px 0;
+}
+.meeting-bubble-header {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  user-select: none;
+}
+.meeting-bubble-header:hover {
+  opacity: 0.85;
+}
+.meeting-bubble-text {
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+.meeting-bubble-chevron {
+  font-size: 0.8rem;
+  color: var(--text-dim, #888);
+  flex-shrink: 0;
+  margin-left: 8px;
+}
+.meeting-bubble-summary {
+  font-size: 0.85rem;
+  color: var(--text-dim, #aaa);
+  margin-top: 4px;
+  font-style: italic;
+}
+.meeting-bubble-summary-pending {
+  opacity: 0.6;
+}
+.meeting-bubble-summary-stub {
+  opacity: 0.6;
+}
+.meeting-bubble-transcript {
+  display: none;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  max-height: 400px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  font-family: var(--mono-font, 'SF Mono', Menlo, monospace);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+.meeting-bubble-expanded .meeting-bubble-transcript {
+  display: block;
+}
+.meeting-bubble-seg {
+  margin-bottom: 2px;
+}
+.meeting-bubble-seg b {
+  color: var(--accent, #4caf82);
+}
+
 /* Stop: red tinted button next to Send. Visible only when claude
    is running (.composer-running). */
 .composer-btn-stop {
