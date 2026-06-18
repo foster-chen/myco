@@ -25,7 +25,7 @@
   try {
     const fs = require('fs');
     const path = require('path');
-    const stateDir = process.env.MYCO_STATE_DIR || path.join(require('os').homedir(), '.myco');
+    const stateDir = process.env.MYCO_STATE_DIR || process.env.MYCO_DATA || path.join(require('os').homedir(), '.myco');
     const envPath = path.join(stateDir, '.env');
     if (!fs.existsSync(envPath)) return;
     const raw = fs.readFileSync(envPath, 'utf8');
