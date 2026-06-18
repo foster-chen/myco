@@ -1697,12 +1697,20 @@ function _attachAgentWebSocket(session, ws, opts = {}) {
     if (ws.readyState !== ws.OPEN) return;
     ws.send(JSON.stringify({ t: 'clarify-reply', ...payload }));
   };
+  // meeting-summary: agent-session emits this when Claude's reply to a
+  // meeting-transcript turn is captured. Forwards the summary to all
+  // attached clients so they can update the collapsed bubble header.
+  const onMeetingSummary = (payload) => {
+    if (ws.readyState !== ws.OPEN) return;
+    ws.send(JSON.stringify({ t: 'meeting-summary', ...payload }));
+  };
 
   session.on('agent-event', onAgentEvent);
   session.on('chat', onChat);
   session.on('state-update', onStateUpdate);
   session.on('exit', onExit);
   session.on('clarify-reply', onClarifyReply);
+  session.on('meeting-summary', onMeetingSummary);
 
   // Track this attach in the presence roster + broadcast the updated
   // list to everyone watching the session (incl. the new connection,
