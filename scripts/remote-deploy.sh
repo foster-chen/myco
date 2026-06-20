@@ -5,11 +5,11 @@
 # access.  All installs are user-level (no sudo required).
 #
 # Usage:
-#   ./scripts/remote-deploy.sh                                  # full deploy with defaults
-#   ./scripts/remote-deploy.sh --skip-deps                      # skip dependency installation
+#   ./scripts/remote-deploy.sh                                  # ship code + restart (default)
+#   ./scripts/remote-deploy.sh --fresh                          # first-time install: deps + state dir + systemd unit + ship + restart
+#   ./scripts/remote-deploy.sh --redeploy                       # restart only, no code shipping
+#   ./scripts/remote-deploy.sh --skip-deps                      # skip dependency installation (with --fresh)
 #   ./scripts/remote-deploy.sh --dry-run                        # plan only; no changes on remote
-#   ./scripts/remote-deploy.sh --redeploy                       # update code + restart (skip steps 1-6)
-#   MYCO_REMOTE_SSH=user@host -p 2222 ./scripts/remote-deploy.sh
 #   MYCO_REMOTE_USER=myuser MYCO_REMOTE_HOST=10.0.0.1 \
 #     MYCO_REMOTE_PORT=22 ./scripts/remote-deploy.sh
 #
@@ -30,8 +30,8 @@ cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)/.."
 REMOTE_USER="${MYCO_REMOTE_USER:-optix}"
 REMOTE_HOST="${MYCO_REMOTE_HOST:-100.120.240.8}"
 REMOTE_PORT="${MYCO_REMOTE_PORT:-2222}"
-REMOTE_REPO="${MYCO_REMOTE_REPO:-\${HOME}/myco}"
-STATE_DIR="${MYCO_STATE_DIR:-\${HOME}/myco-state}"
+REMOTE_REPO="${MYCO_REMOTE_REPO:-~/myco}"
+STATE_DIR="${MYCO_STATE_DIR:-~/myco-state}"
 LISTEN="${MYCO_REMOTE_LISTEN:-0.0.0.0:3000}"
 NODE_VER="${MYCO_NODE_VERSION:-20}"
 SERVICE_NAME="${MYCO_SERVICE_NAME:-mycod}"
@@ -39,6 +39,7 @@ SERVICE_NAME="${MYCO_SERVICE_NAME:-mycod}"
 SKIP_DEPS=0
 DRY_RUN=0
 REDEPLOY=0
+FRESH=0
 ENV_OVERWRITE=""
 
 LISTEN_HOST="${LISTEN%%:*}"
@@ -71,9 +72,12 @@ usage() {
   cat <<FLAGS
 
 Flags:
-  --skip-deps     Skip dependency installation (step 2)
+  --fresh         First-time install: install deps, create state dir + systemd
+                  unit, ship code, and restart. Use on a never-deployed host.
+  --redeploy      Restart the service only; no code shipping, no npm install.
+                  Equivalent to: systemctl --user restart mycod
+  --skip-deps     Skip dependency installation (only meaningful with --fresh)
   --dry-run       Print plan and exit; no changes on remote
-  --redeploy      Update code + restart only (skip steps 1-6)
   --env-overwrite <path>
                   Overwrite remote .env with the given local file.
                   Without this flag the remote .env is never touched.
@@ -96,6 +100,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-deps)   SKIP_DEPS=1; shift ;;
     --dry-run)     DRY_RUN=1; shift ;;
+    --fresh)       FRESH=1; shift ;;
     --redeploy)    REDEPLOY=1; shift ;;
     --env-overwrite)
       [[ $# -lt 2 ]] && die "--env-overwrite requires a path argument"
@@ -235,7 +240,7 @@ step_start_verify() {
   ssh_remote "$(xdg_prefix) && \
     systemctl --user daemon-reload && \
     systemctl --user enable ${SERVICE_NAME}.service && \
-    systemctl --user start ${SERVICE_NAME}.service && \
+    systemctl --user restart ${SERVICE_NAME}.service && \
     loginctl enable-linger ${REMOTE_USER} && \
     sleep 3 && systemctl --user status ${SERVICE_NAME}.service"
 
@@ -264,9 +269,9 @@ step_push_env() {
   info "  Remote .env overwritten from ${ENV_OVERWRITE}"
 }
 
-# ─── redeploy: update code + restart ─────────────────────────────────────────
-do_redeploy() {
-  info "Redeploying (update code + restart) ..."
+# ─── default: ship code + restart (assumes deps already installed) ────────────
+do_default() {
+  info "Shipping code + restarting (default deploy) ..."
 
   info "  Creating archive from HEAD ..."
   local tmp_archive
@@ -304,7 +309,32 @@ do_redeploy() {
     warn "  Server returned HTTP ${http_code:-<no response>} — may need more time or config"
   fi
 
-  info "Redeploy complete"
+  info "Deploy complete"
+}
+
+# ─── redeploy: restart only, no code shipping ─────────────────────────────────
+do_restart_only() {
+  info "Restarting service (no code shipping) ..."
+
+  info "  Restarting service ..."
+  ssh_remote "$(xdg_prefix) && systemctl --user restart ${SERVICE_NAME}.service"
+
+  info "  Waiting for service to come up ..."
+  sleep 3
+
+  info "  Verifying service status ..."
+  ssh_remote "$(xdg_prefix) && systemctl --user status ${SERVICE_NAME}.service 2>&1 | head -8"
+
+  info "  Checking HTTP response ..."
+  local http_code
+  http_code=$(ssh_remote "curl -s -o /dev/null -w '%{http_code}' http://localhost:${LISTEN_PORT}/" 2>/dev/null || true)
+  if [[ "$http_code" == "200" ]]; then
+    info "  Server responding (HTTP ${http_code})"
+  else
+    warn "  Server returned HTTP ${http_code:-<no response>} — may need more time or config"
+  fi
+
+  info "Restart complete"
 }
 
 # ─── main ────────────────────────────────────────────────────────────────────
@@ -316,33 +346,34 @@ main() {
   fi
 
   if [[ $REDEPLOY -eq 1 ]]; then
-    do_redeploy
+    do_restart_only
     exit 0
   fi
 
-  step_check_ssh
+  if [[ $FRESH -eq 1 ]]; then
+    step_check_ssh
 
-  if [[ $SKIP_DEPS -eq 0 ]]; then
-    step_install_deps
-  else
-    info "Step 2: Skipping dependency installation (--skip-deps)"
-  fi
+    if [[ $SKIP_DEPS -eq 0 ]]; then
+      step_install_deps
+    else
+      info "Step 2: Skipping dependency installation (--skip-deps)"
+    fi
 
-  step_transfer_repo
-  step_npm_install
-  step_create_state_dir
+    step_transfer_repo
+    step_npm_install
+    step_create_state_dir
 
-  if [[ -n "$ENV_OVERWRITE" ]]; then
-    step_push_env
-  fi
+    if [[ -n "$ENV_OVERWRITE" ]]; then
+      step_push_env
+    fi
 
-  step_create_service
-  step_start_verify
+    step_create_service
+    step_start_verify
 
-  cat <<POST
+    cat <<POST
 
 ──────────────────────────────────────────────────
-  Deploy complete!
+  Fresh install complete!
 ──────────────────────────────────────────────────
   Service:   ${SERVICE_NAME}.service (systemd --user)
   Listen:    ${LISTEN_HOST}:${LISTEN_PORT}
@@ -364,8 +395,33 @@ main() {
   Useful commands:
     systemctl --user status ${SERVICE_NAME}     # check status
     journalctl --user -u ${SERVICE_NAME} -f     # live logs
-    ./scripts/remote-deploy.sh --redeploy       # update + restart
+    ./scripts/remote-deploy.sh                  # ship code + restart (default)
+    ./scripts/remote-deploy.sh --redeploy       # restart only, no shipping
 ──────────────────────────────────────────────────
+POST
+    exit 0
+  fi
+
+  # Default: ship code + npm install + restart (assumes deps already installed)
+  step_check_ssh
+  do_default
+
+  cat <<POST
+
+──────────────────────────────────────────────────────────
+  Deploy complete!
+──────────────────────────────────────────────────────────
+  Service:   ${SERVICE_NAME}.service (systemd --user)
+  Listen:    ${LISTEN_HOST}:${LISTEN_PORT}
+  State dir: ${STATE_DIR}
+  Repo:      ${REMOTE_REPO}
+
+  Useful commands:
+    systemctl --user status ${SERVICE_NAME}     # check status
+    journalctl --user -u ${SERVICE_NAME} -f     # live logs
+    ./scripts/remote-deploy.sh --redeploy       # restart only, no shipping
+    ./scripts/remote-deploy.sh --fresh          # full first-time install
+──────────────────────────────────────────────────────────
 POST
 }
 
