@@ -17,7 +17,7 @@
 #   MYCO_REMOTE_USER     Remote SSH user               (default: optix)
 #   MYCO_REMOTE_HOST     Remote SSH host               (default: 100.120.240.8)
 #   MYCO_REMOTE_PORT     Remote SSH port               (default: 2222)
-#   MYCO_REMOTE_REPO     Repo location on remote       (default: ~/myco)
+#   MYCO_REMOTE_REPO     Repo location on remote       (default: ~/code/myco)
 #   MYCO_STATE_DIR       State dir on remote           (default: ~/myco-state)
 #   MYCO_REMOTE_LISTEN   Host:port for the server      (default: 0.0.0.0:3000)
 #   MYCO_NODE_VERSION    Node.js major version         (default: 20)
@@ -30,7 +30,7 @@ cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)/.."
 REMOTE_USER="${MYCO_REMOTE_USER:-optix}"
 REMOTE_HOST="${MYCO_REMOTE_HOST:-100.120.240.8}"
 REMOTE_PORT="${MYCO_REMOTE_PORT:-2222}"
-REMOTE_REPO="${MYCO_REMOTE_REPO:-~/myco}"
+REMOTE_REPO="${MYCO_REMOTE_REPO:-~/code/myco}"
 STATE_DIR="${MYCO_STATE_DIR:-~/myco-state}"
 LISTEN="${MYCO_REMOTE_LISTEN:-0.0.0.0:3000}"
 NODE_VER="${MYCO_NODE_VERSION:-20}"
@@ -87,7 +87,7 @@ Environment variables:
   MYCO_REMOTE_USER   Remote SSH user          (default: optix)
   MYCO_REMOTE_HOST   Remote SSH host          (default: 100.120.240.8)
   MYCO_REMOTE_PORT   Remote SSH port          (default: 2222)
-  MYCO_REMOTE_REPO   Repo location on remote  (default: ~/myco)
+  MYCO_REMOTE_REPO   Repo location on remote  (default: ~/code/myco)
   MYCO_STATE_DIR     State dir on remote      (default: ~/myco-state)
   MYCO_REMOTE_LISTEN Host:port for server     (default: 0.0.0.0:3000)
   MYCO_NODE_VERSION  Node.js major version    (default: 20)
@@ -163,14 +163,14 @@ step_transfer_repo() {
   info "  Archive created ($(du -h "$tmp_archive" | cut -f1))"
   scp_remote "$tmp_archive" "${REMOTE_USER}@${REMOTE_HOST}:/tmp/myco-src.tgz"
   rm -f "$tmp_archive"
-  ssh_remote "mkdir -p ~/myco && tar -xzf /tmp/myco-src.tgz -C ~/myco"
+  ssh_remote "mkdir -p ~/code/myco && tar -xzf /tmp/myco-src.tgz -C ~/code/myco"
   info "Step 3 done"
 }
 
 # ─── step 4: install npm dependencies ────────────────────────────────────────
 step_npm_install() {
   info "Step 4: Installing npm dependencies ..."
-  ssh_remote "$(nvm_prefix) && cd ~/myco/server && npm install"
+  ssh_remote "$(nvm_prefix) && cd ~/code/myco/server && npm install"
   info "Step 4 done"
 }
 
@@ -284,8 +284,8 @@ do_default() {
   rm -f "$tmp_archive"
 
   info "  Extracting archive + installing dependencies on remote ..."
-  ssh_remote "$(nvm_prefix) && tar -xzf /tmp/myco-src.tgz -C ~/myco && \
-    cd ~/myco/server && npm install"
+  ssh_remote "$(nvm_prefix) && tar -xzf /tmp/myco-src.tgz -C ~/code/myco && \
+    cd ~/code/myco/server && npm install"
 
   if [[ -n "$ENV_OVERWRITE" ]]; then
     step_push_env
