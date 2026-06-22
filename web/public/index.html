@@ -197,25 +197,25 @@
               <svg class="composer-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15.707 21.293-2-2a1 1 0 0 1 0-1.414l8.586-8.586a1 1 0 0 1 1.414 0l2 2a1 1 0 0 1 0 1.414l-8.586 8.586a1 1 0 0 1-1.414 0"/><path d="M18 13 13 8"/><path d="m2 2 7.586 7.586"/><circle cx="11" cy="11" r="2"/></svg>
               <span class="composer-btn-label">Draw</span>
             </button>
-            <button type="button" id="chat-meeting" class="composer-btn composer-btn-meeting" title="Upload a meeting recording for diarization + transcript" aria-label="Upload meeting recording">
+            <select id="composer-critic-select" class="composer-critic-select" title="Choose which critic model audits your task completion">
+              <!-- fr-88 r10: short option labels. Pre-r10 every option
+              was "⚖️ Critic: <Model>" (~110-120px wide closed) —
+                user asked to show just "Critic" when nothing is
+                picked + just the model name once a choice is made.
+                The disabled-selected placeholder shows "⚖️ Critic"
+                on fresh sessions; the WS critic-model-changed
+                handler (app.js ~7054) populates the chosen option
+                on sessions that already have a persisted critic. -->
+                <option value="" disabled selected>⚖️ Critic</option>
+                <option value="gemini">⚖️ Gemini</option>
+                <option value="codex">⚖️ OpenAI</option>
+                <option value="custom">⚖️ Hosted</option>
+              </select>
+            <button type="button" id="chat-meeting" class="composer-btn composer-btn-meeting" title="Upload a meeting recording for diarization + transcript" aria-label="Upload meeting recording" disabled>
               <svg class="composer-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
               <span class="composer-btn-label">Meeting</span>
             </button>
             <input type="file" id="meeting-file-input" accept="audio/*" hidden>
-            <select id="composer-critic-select" class="composer-critic-select" title="Choose which critic model audits your task completion">
-              <!-- fr-88 r10: short option labels. Pre-r10 every option
-                   was "⚖️ Critic: <Model>" (~110-120px wide closed) —
-                   user asked to show just "Critic" when nothing is
-                   picked + just the model name once a choice is made.
-                   The disabled-selected placeholder shows "⚖️ Critic"
-                   on fresh sessions; the WS critic-model-changed
-                   handler (app.js ~7054) populates the chosen option
-                   on sessions that already have a persisted critic. -->
-              <option value="" disabled selected>⚖️ Critic</option>
-              <option value="gemini">⚖️ Gemini</option>
-              <option value="codex">⚖️ OpenAI</option>
-              <option value="custom">⚖️ Hosted</option>
-            </select>
             <button type="submit" id="chat-send" class="composer-btn composer-btn-send" title="Send (Enter)" aria-label="Send">
               <svg class="composer-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>
               <span class="composer-btn-label">Send</span>

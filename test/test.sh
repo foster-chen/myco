@@ -4851,7 +4851,8 @@ test_chat_window() {
   # Meeting WS frame: attach.js registers a meeting-summary listener that
   # forwards { t: 'meeting-summary', ...payload } to attached WS clients.
   node_test_result test/meeting-ws-frame.test.js "test/meeting-ws-frame.test.js (2 cases)"
-  # Meeting-upload client wiring: #chat-meeting button in HTML, hidden file
+  # Meeting-upload client wiring: #chat-meeting button in HTML (disabled attr
+  # is a WIP gate until meeting upload is released), hidden file
   # input with accept="audio/*", _bindMeetingUpload POSTs to
   # /whisper/transcribe-meeting with sessionId, validates audio type,
   # collapsible bubble render branch, meeting-summary WS handler.

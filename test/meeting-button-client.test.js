@@ -24,6 +24,13 @@ t('#chat-meeting button exists in index.html', () => {
     '#chat-meeting button must exist in index.html (composer, between #chat-diagram and #composer-critic-select)');
 });
 
+t('#chat-meeting has disabled attr in index.html (WIP gate)', () => {
+  const m = HTML.match(/<button[^>]*id="chat-meeting"[^>]*>/);
+  assert.ok(m, '#chat-meeting button not found in index.html');
+  assert.ok(/disabled/.test(m[0]),
+    '#chat-meeting must have the disabled attribute in HTML — WIP feature gate (meeting upload not yet released). Found: ' + m[0]);
+});
+
 t('#meeting-file-input hidden file input exists with accept="audio/*"', () => {
   assert.ok(/id="meeting-file-input"/.test(HTML),
     '#meeting-file-input hidden file input must exist in index.html');
